@@ -2094,3 +2094,235 @@ OpenSSL（仅性能对比工具需要）、Wireshark（替代 tcpdump）、Pytho
 **M2 要考虑的一个细节**：主机上的 CMake 是 **4.x**，而项目 `CMakeLists.txt` 里写的是
 `cmake_minimum_required(VERSION 3.10)`；CMake 4 对过低的版本声明会报错/告警，
 M2 时需要把它提升到 3.16（Linux 侧的 CMake 3.16 也满足）。
+
+---
+
+# 23. 第八轮：Windows 迁移 M2–M6 实施与两端回归（2026-10-01）
+
+> 本轮把 §22.3 的迁移计划真正落地：网络层移植（M2）、路径与文件 I/O（M3）、
+> 控制台编码（M4）、全量回归（M6），并在**同一台 Windows 主机**上跑通了
+> 「Windows Alice ↔ Ubuntu Bob」的跨系统双机通信与性能对比（M6 的证据补齐）。
+>
+> **M5（Qt 界面）未完成**，原因见 §23.8：主机上只有 Qt Creator，没有 Qt SDK。
+
+## 23.1 里程碑对照
+
+| 阶段 | 内容 | 状态 | 验收结果 |
+| --- | --- | --- | --- |
+| M1 | 平台无关部分编译与标准向量 | ✅ 上一轮完成 | 4/4 通过 |
+| M2 | 网络层移植（winsock2 + WSA 错误码 + 超时/关闭语义） | ✅ 本轮完成 | `test_frame` / `test_network` / `test_tcp_roundtrip` 通过 |
+| M3 | 路径与文件 I/O、`%TEMP%`、权限检查降级 | ✅ 本轮完成 | `test_file_transfer` / `test_transfer_meta` / `test_access_control*` 通过 |
+| M4 | 控制台中文输出 | ✅ 本轮完成 | `alice` / `bob` 中文日志、握手与文件表头均不乱码 |
+| M5 | Qt 界面 | ⛔ **未完成** | 主机无 Qt SDK（见 §23.8 决策点） |
+| M6 | 全量回归 + 重新采集证据 | ✅ 本轮完成 | Windows 与 Linux **各 16/16 测试全绿** + 跨系统双机 + 性能对比 |
+| M7 | 文档同步 | ✅ 本轮完成 | 本节 + `README.md` + `docs/performance.md` |
+
+## 23.2 代码改动清单（本轮，共 13 个文件改动 + 2 个新文件）
+
+| 文件 | 改动 | 为什么 |
+| --- | --- | --- |
+| `src/network/network.cpp` | `#if defined(_WIN32)` 双路径：`winsock2.h/ws2tcpip.h`、`WSAStartup/WSACleanup`（静态守卫）、`closesocket`、`WSAGetLastError` + `std::system_category()` 错误映射、超时由 `timeval` 改 `DWORD` 毫秒、`SD_BOTH` 关闭 | 网络层唯一的平台相关实现 |
+| `tests/raw_client.h` | 同样的双路径 + 新增 `kInvalidHandle`（`INVALID_SOCKET` / `-1`） | 测试里的裸 socket 客户端；顺带修掉 MinGW 下 3 条 `-Wtype-limits` 警告 |
+| `include/common/path_utils.h` | Windows 用 `_mkdir()`（`<direct.h>`） | `mkdir()` 在 Windows 叫 `_mkdir()` |
+| `tests/test_util.h` | 新增 `tempDir()`（`%TEMP%/st_tests` 与 `/tmp/st_tests`）与 `workDir()` | 测试不再写死 `/tmp`（原来在 Windows 上会执行 `mkdir -p` 而报错） |
+| `tests/unit/test_transfer_meta.cpp`<br>`tests/integration/test_file_transfer.cpp`<br>`tests/integration/test_access_control.cpp`<br>`tests/unit/test_access_control.cpp` | 路径改用 `testutil::tempDir()/workDir()`，去掉 `std::system("mkdir -p ...")` | 同上；顺带修掉 `"/tmp/x/photo.PNG"` 这种绝对路径断言 |
+| `src/common/random.cpp` | Windows 用 `BCryptGenRandom`（`bcrypt.h`），POSIX 分支保留 `/dev/urandom` | Windows 没有 `/dev/urandom`；随机数允许调用系统 API，密码算法仍然全部自写 |
+| `src/security/keystore.cpp` | Windows 跳过 POSIX 权限位检查（`stat`/`S_IRGRP`） | Windows 无权限位语义，密钥文件由 NTFS ACL 保护；否则每个密钥文件都会误报"权限过宽" |
+| `include/common/log.h` | `#ifdef ERROR #undef ERROR` | `<windows.h>` 把 `ERROR` 定义成整数宏，与 `stlog::Level::ERROR` 冲突 |
+| **`include/common/console.h`（新）**<br>**`src/common/console.cpp`（新）** | `stconsole::ensureUtf8()`：Windows 下调 `SetConsoleOutputCP(CP_UTF8)`，POSIX 下空实现 | 中文日志在 Windows 控制台默认 GBK 下会乱码 |
+| `apps/alice/main.cpp`、`apps/bob/main.cpp`、`apps/ui/main.cpp` | `main()` 首行调用 `stconsole::ensureUtf8()` | 同上 |
+| `apps/ui/session_worker.cpp`、`include/security/access_control.h`、`src/security/access_control.cpp` 等 7 处 | 命名空间 `access` → **`acl`** | MinGW 的 `<unistd.h>` 里有 `access()` 函数，与命名空间同名会冲突；纯改名，逻辑不变 |
+| `CMakeLists.txt` | ① `cmake_minimum_required` 3.10 → **3.16**；② `if(WIN32)` 链接 `ws2_32`；③ `if(WIN32)` 链接 `bcrypt`；④ `crypto_benchmark` 单独加 `-Wno-deprecated-declarations` | CMake 4.x 不再接受 3.10 声明；Winsock/BCrypt 需显式链接；OpenSSL 3.x 对经典 `CMAC_*` 接口有弃用告警（该工具刻意用它以对齐虚拟机里的 OpenSSL 1.1.1） |
+| `tools/crypto_benchmark.cpp` | `cpuAesCapability()` 增加 Windows 分支（`__builtin_cpu_supports("aes")`） | 原来只读 `/proc/cpuinfo`，在 Windows 上**必然**误报"不支持 AES-NI"（本机 i5-1340P 实际支持），会让性能对比结论失真 |
+
+**没有改动的部分**：`src/crypto/aes.cpp`、`src/crypto/cmac.cpp`（第一部分成果原样保留）、
+协议/安全/应用层的业务逻辑、`Session` 状态机、数据包格式。
+
+## 23.3 Windows 侧实测结果
+
+**构建（MSYS2 MinGW-w64 / Ninja / Release）**
+
+```text
+g++ 16.2.0，CMake 4.4.3，Ninja 1.13.2
+cmake --build build-win -j8   → 0 error，0 warning
+```
+
+**自动化测试**
+
+```text
+100% tests passed out of 16        （16/16，耗时 6.07 s）
+```
+
+其中原来在 Windows 上失败的 5 个用例（`test_network`、`test_transfer_meta`、
+`test_access_control`、`test_file_transfer`、`test_access_control_e2e`）
+分别由「`/tmp` + `mkdir -p`」和「`SO_REUSEADDR` 语义差异」两条原因修复。
+
+**端到端演示（Windows 本机 loopback）**
+
+```text
+alice_rc=0  bob_rc=0
+4 条测试消息：全部安全传输成功
+文件/图像：test_file_64KB.bin / test_file_1MB.bin /
+           test_image_256x256.png / test_image_1024x768.png
+接收端校验：4/4「字节数一致 + CRC32 一致」
+sha256 复核：4/4 与源文件逐字节一致
+访问控制：admin 全部允许（含 WHOAMI、查看审计日志）；
+          guest（mallory）view_log / send_file 被服务端拒绝并写入 DENY 审计记录
+```
+
+## 23.4 Linux 回归（防止"为 Windows 破坏了 Linux"）
+
+迁移改动全部是 `#if defined(_WIN32)` 分支，但必须实测验证：
+
+```text
+Ubuntu 20.04.6 / g++ 9.4.0 / CMake 3.16.3
+cmake .. && cmake --build . -j4   → 0 error，0 warning
+ctest                              → 100% tests passed out of 16
+Alice/Bob 演示                     → 4 条消息 + 2 个文件/图像全部成功
+文件校验                           → 4/4 逐字节一致
+```
+
+有一处**恰好证明改动是"Windows 局部"**的证据：在 Ubuntu 上运行 `alice` 仍会打印
+
+```text
+[WARN] 密钥文件 ../configs/keys.conf 对 group/other 可读，建议执行 chmod 600 收紧权限
+```
+
+即密钥权限检查在 Linux 上依然生效（刚部署到 `/home/securityTransfer` 时 `keys.conf`
+是 644），只有 Windows 分支才跳过。
+
+## 23.5 平台差异清单（报告里会被追问的部分）
+
+| 项目 | Linux（Ubuntu 621） | Windows | 我们的处理 |
+| --- | --- | --- | --- |
+| 套接字 API | POSIX `socket/recv/send`，`errno` | Winsock2，`SOCKET`/`INVALID_SOCKET`，`WSAGetLastError()` | `#ifdef` 双路径，错误码各自映射成同一条中文错误消息；`WSAStartup` 用静态对象在 `main` 之前完成 |
+| 关闭语义 | `shutdown(fd, SHUT_RDWR)` + `close()` | `shutdown(SD_BOTH)` + `closesocket()` | 统一封装成 `kShutdownBoth` / `closeSocket()` |
+| 超时 | `setsockopt(SO_RCVTIMEO, timeval)` | 同一 API 但参数是 `DWORD` 毫秒 | `applyTimeout()` 内部按平台构造参数 |
+| 监听端口的复用 | `SO_REUSEADDR` 只影响 TIME_WAIT 套接字 | `SO_REUSEADDR` **允许第二个 socket 抢占已监听端口** | **保留 `SO_REUSEADDR`**（保证服务端重启后能立刻重新绑定端口）；把「同一端口重复 listen 必须失败」的断言用 `#ifndef _WIN32` 限定为 Linux 语义。**是否要改成更严格的 `SO_EXCLUSIVEADDRUSE` 见 §23.8 决策点 2** |
+| 系统随机数 | `/dev/urandom` | `BCryptGenRandom`（CNG） | 两个分支都是操作系统级 CSPRNG；失败才回退 `std::random_device` |
+| 密钥文件权限 | `stat()` + `S_IRGRP/S_IROTH` | 无权限位概念 | Windows 跳过该检查，文档提示用 NTFS ACL |
+| 临时目录 | `/tmp/st_tests` | `%TEMP%/st_tests` | 测试改用 `testutil::tempDir()` |
+| 控制台编码 | 终端本身 UTF-8 | 默认 GBK，中文日志乱码 | `SetConsoleOutputCP(CP_UTF8)` |
+| 对比用的 OpenSSL | 1.1.1f（`libssl-dev`） | 3.6.5（MSYS2 `mingw-w64-x86_64-openssl`） | 性能对比工具两版都能编；3.x 对 `CMAC_*` 有弃用告警，已单独关闭 |
+| 编译期警告 | — | MinGW 报 `namespace access` 与 `access()` 冲突、`<windows.h>` 的 `ERROR` 宏冲突 | 改名 `acl`；`#undef ERROR` |
+
+**一个实际踩到的坑（与代码无关）**：在受限沙箱里运行 `alice.exe` 连接虚拟机时，
+`connect()` 会直接失败并返回 `WSAEACCES (10013)`（"以一种访问权限不允许的方式做了一个访问套接字的尝试"）。
+这不是程序缺陷也不是 Windows 防火墙：在正常（非沙箱）环境下同一条命令一次通过。
+遇到 10013 时先确认是不是被沙箱/安全软件限制了出站套接字。
+
+## 23.6 跨系统"双机"测试：Windows Alice ↔ Ubuntu Bob
+
+这是迁移后的关键验证——**两台不同操作系统的机器之间**跑完整安全会话，
+而不是同一台机器上的 loopback。拓扑：主机 `192.168.111.1`（VMnet8）↔ 虚拟机 `192.168.111.139`。
+
+| 方向 | 命令 | 结果 |
+| --- | --- | --- |
+| A：Windows Alice → Ubuntu Bob | `alice.exe 192.168.111.139 9800 --quiet --whoami --file ... --image ...` | `alice_rc=0`；`SessionId = 8d06811d4dfb3c4a`；4 条消息 + 2 个文件/图像全部成功；应用层吞吐 **54.51 MB/s** |
+| B：Ubuntu Alice → Windows Bob | `./alice 192.168.111.1 9801 --quiet --file ...` | `alice_rc=0`；`SessionId = 9b4aff3f40ee0f01`；4 条消息 + 1 个文件成功；应用层吞吐 **28.28 MB/s** |
+
+两侧 `K_master` 指纹一致（`8409fd42b2df5cb3`），说明密钥预配置在两台机器上是对齐的；
+接收端文件用 **sha256** 复核，与发送端**逐字节一致**：
+
+```text
+test_file_64KB.bin        5eb4ca70d0ee472b...  （VM 侧 received_lan/ 与主机侧 received_lan_win/ 均一致）
+test_image_256x256.png    f8ea510fbcb5e006...  （VM 侧一致）
+```
+
+反方向（B）能成功也顺带说明：Windows 侧**不需要**为 `bob.exe` 单独放行入站规则，
+因为 VMnet8 属于 VMware 虚拟网络，来宾到主机的这一条回程是通的。
+
+## 23.7 与库实现的性能对比（Windows 侧，课程要求 5）
+
+**环境**
+
+| 项目 | 说明 |
+| --- | --- |
+| 机器 | 物理机：13th Gen Intel Core i5-1340P（Windows 主机，非虚拟机） |
+| 编译器 | MinGW-w64 g++ 16.2.0，`-O3`（CMake `Release`，Ninja） |
+| 对比库 | OpenSSL **3.6.5**（MSYS2 `mingw-w64-x86_64-openssl`） |
+| CPU 能力 | **支持 AES-NI**（原来的 `/proc/cpuinfo` 检测在 Windows 上失效，本轮已修，见 §23.2） |
+
+### 23.7.1 AES-128-CTR（默认：OpenSSL 使用 AES-NI）
+
+| 数据大小 | 自实现(MB/s) | 库实现(MB/s) | 吞吐率比(库/自) |
+| --- | --- | --- | --- |
+| 1 KB | 132.2 | 1614.2 | 12.21x |
+| 64 KB | 131.3 | 1857.1 | 14.15x |
+| 1 MB | 129.6 | 3029.6 | 23.37x |
+| 10 MB | 121.5 | 2599.9 | 21.39x |
+| 100 MB | 121.3 | 2254.5 | 18.58x |
+
+### 23.7.2 AES-128-CTR（`OPENSSL_ia32cap=~0x200000200000000`，禁用硬件加速，纯软件对纯软件）
+
+| 数据大小 | 自实现(MB/s) | 库实现(MB/s) | 吞吐率比(库/自) |
+| --- | --- | --- | --- |
+| 1 KB | 140.1 | 522.6 | 3.73x |
+| 64 KB | 132.5 | 500.9 | 3.78x |
+| 1 MB | 127.5 | 525.9 | 4.13x |
+| 10 MB | 131.4 | 571.5 | 4.35x |
+
+### 23.7.3 CMAC
+
+| 数据大小 | 自实现(MB/s) | 库实现(MB/s)（默认） | 吞吐率比 | 库实现(MB/s)（禁 AES-NI） | 吞吐率比 |
+| --- | --- | --- | --- | --- | --- |
+| 1 KB | 139.3 | 901.3 | 6.47x | 312.8 | 2.50x |
+| 64 KB | 130.8 | 1951.4 | 14.92x | 390.5 | 2.93x |
+| 1 MB | 140.7 | 1940.1 | 13.79x | 394.0 | 2.96x |
+| 10 MB | 138.0 | 1912.6 | 13.86x | 398.6 | 2.93x |
+| 100 MB | 118.5 | 1956.2 | 16.51x | — | — |
+
+**结论与 Linux 侧完全一致**（机制上的结论，而不是巧合）：
+
+1. 默认情况下库快 **12 ~ 23 倍**（AES-CTR）与 **6 ~ 17 倍**（CMAC）——
+   差距主要来自 **AES-NI 硬件指令**；
+2. 关掉硬件加速后差距缩小到 **2.5 ~ 4.4 倍**，这部分来自工程优化
+   （汇编实现、多分组并行、查表/流水线），不是算法错误；
+3. 正确性交叉验证在 Windows 上也一致：AES-CTR 密文 `a38b4e54…2521`、
+   CMAC `070a16b4…287c` 与 OpenSSL **逐字节相同**——先证明"算的是同一个结果"，
+   性能数字才有意义。
+
+## 23.8 剩余工作与需要你决策的问题
+
+**决策点 1（阻塞 M5）：Qt 界面怎么装？**
+
+主机上现有的 `D:\AppGallery\Qt\qt` **只是 Qt Creator 6.0.1 IDE**（自带 Qt 6 运行时 DLL），
+没有头文件、没有 `qmake`、没有 CMake 的 Qt5/Qt6 配置包，**无法用来编译 `st_ui`**。
+三条可选路线：
+
+| 方案 | 做法 | 代价 | 说明 |
+| --- | --- | --- | --- |
+| A（推荐） | MSYS2 装 `mingw-w64-x86_64-qt5` | 约 1 GB 安装体积，装在已有的 `D:\AppGallery\dev-tools\msys64`（D 盘，不需要管理员） | 与现有 g++ 16.2.0 **同一套 ABI**，CMake 里 `find_package(Qt5)` 直接可用，代码零改动 |
+| B | 官方 Qt 安装器装 Qt 6 + MinGW 套件 | 需要登录 Qt 账号，几 GB | 会多出一套 MinGW，与 MSYS2 那套并存 |
+| C | UI 保持在 Linux 演示，Windows 只交付命令行 | 0 | 课程要求 8 已在 Ubuntu 上完成并留了截图；但 Windows 上就不能演示界面 |
+
+**决策点 2（可选）：Windows 的监听端口要不要更严格？**
+
+现在 Windows 上沿用 `SO_REUSEADDR`，好处是服务端重启后能立刻重新绑定同一端口；
+代价是**同一台机器上的另一个进程可以抢占同一个端口**（Windows 的语义与 Linux 不同）。
+如果更看重"端口不可被抢占"（安全课的角度），可以把 Windows 分支改成 `SO_EXCLUSIVEADDRUSE`；
+代价是该端口处于 TIME_WAIT 时（例如刚结束一次会话就重启 Bob）需要等几分钟才能重新监听。
+**目前保持现状**，等你决定。
+
+**其它剩余项（都不阻塞交付）**
+
+1. 中文文件名的 UTF-16 路径封装（`std::filesystem::u8path` 或 `_wfopen`）：现在路径已全部英文化，
+   属于"稳健性增强"，不是必需；
+2. Windows 侧打包发布（`windeployqt` 或静态链接）与"一键启动脚本"（`scripts/*.bat`）；
+3. Wireshark 抓包证据（要求 6/7 的"窃听演示"）：主机装了 Wireshark，
+   但需要图形界面操作，适合演示时现场录屏；
+4. 全部跑通后再做 GitHub 提交（用户明确要求：**先跑通，再提交**）。
+
+## 23.9 本轮的经验
+
+1. **"能编译"和"能跑通"是两件事**：移植后代码一次编译通过、0 警告，
+   但仍有 5 个测试失败——原因全在**测试代码写死了平台相关的路径与外部命令**
+   （`/tmp`、`mkdir -p`）。跨平台化要连测试一起做。
+2. **平台差异要写在文档里，而不是藏在 `#ifdef` 里**：`SO_REUSEADDR` 在 Windows 上
+   是"允许抢占"，在 Linux 上是"允许复用 TIME_WAIT"，同名不同义；
+   这类差异如果不说清楚，报告里被问到会答不上来。
+3. **性能对比的"环境说明"本身就是结论的一部分**：本轮发现 `cpuAesCapability()`
+   在 Windows 上读不到 `/proc/cpuinfo` 而误报"不支持 AES-NI"。
+   如果不查这一点，就会把"库用硬件、我们纯软件"的 20 倍差距说成"实现水平差距"。
+4. **迁移必须有反方向的回归**：Windows 全绿不代表 Linux 还活着；
+   本轮两端各跑了一遍完整 `ctest` + 端到端演示，才算真正验证。

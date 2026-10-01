@@ -18,12 +18,27 @@
 #include <cstring>
 #include <vector>
 
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 namespace testutil {
+
+#if defined(_WIN32)
+using SocketHandle = SOCKET;
+inline constexpr SocketHandle kInvalidHandle = INVALID_SOCKET;
+inline void closeHandle(SocketHandle handle) { ::closesocket(handle); }
+#else
+using SocketHandle = int;
+inline constexpr SocketHandle kInvalidHandle = -1;
+inline void closeHandle(SocketHandle handle) { ::close(handle); }
+#endif
 
 /// 绕过 Frame 封装、直接写 socket 的测试辅助类。
 class RawClient {
@@ -41,8 +56,8 @@ public:
     bool connectTo(uint16_t port) {
         closeNow();
 
-        const int handle = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (handle < 0) {
+        const SocketHandle handle = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (handle == kInvalidHandle) {
             return false;
         }
 
@@ -53,7 +68,7 @@ public:
         address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
         if (::connect(handle, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
-            ::close(handle);
+            closeHandle(handle);
             return false;
         }
 
@@ -63,24 +78,24 @@ public:
 
     /// 发送一段原始字节（不添加任何长度前缀）。
     bool sendBytes(const std::vector<uint8_t>& data) {
-        if (handle_ < 0 || data.empty()) {
+        if (handle_ == kInvalidHandle || data.empty()) {
             return false;
         }
-        const ssize_t sent = ::send(handle_, reinterpret_cast<const char*>(data.data()),
+        const int sent = ::send(handle_, reinterpret_cast<const char*>(data.data()),
                                     static_cast<int>(data.size()), 0);
-        return sent == static_cast<ssize_t>(data.size());
+        return sent >= 0 && static_cast<std::size_t>(sent) == data.size();
     }
 
     /// 关闭连接（不发送任何额外数据）。
     void closeNow() {
-        if (handle_ >= 0) {
-            ::close(handle_);
-            handle_ = -1;
+        if (handle_ != kInvalidHandle) {
+            closeHandle(handle_);
+            handle_ = kInvalidHandle;
         }
     }
 
 private:
-    int handle_ = -1;
+    SocketHandle handle_ = kInvalidHandle;
 };
 
 }  // namespace testutil

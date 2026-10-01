@@ -14,8 +14,12 @@
 #include <cstring>
 #include <string>
 
+#if defined(_WIN32)
+#include <direct.h>
+#else
 #include <sys/stat.h>
 #include <sys/types.h>
+#endif
 
 /// 递归创建目录（已存在则视为成功）。
 inline bool ensureDirectory(const std::string& path) {
@@ -40,7 +44,11 @@ inline bool ensureDirectory(const std::string& path) {
             current += '/';
         }
         current += part;
+#if defined(_WIN32)
+        if (::_mkdir(current.c_str()) != 0 && errno != EEXIST) {
+#else
         if (::mkdir(current.c_str(), 0755) != 0 && errno != EEXIST) {
+#endif
             return false;
         }
     }

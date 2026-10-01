@@ -13,7 +13,7 @@
 #      build/tests/test_* （可用 ctest 运行）
 # ============================================================================
 
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.16)
 
 project(SecureTransfer
         VERSION 0.2.0
@@ -42,6 +42,11 @@ add_library(st_network STATIC
         src/network/network.cpp)
 target_include_directories(st_network PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+# Windows 下 Winsock 需要显式链接 ws2_32（Linux 侧不需要）
+if(WIN32)
+    target_link_libraries(st_network PUBLIC ws2_32)
+endif()
+
 # ---------------------------------------------------------------------------
 # 密码层
 #   * aes.cpp / cmac.cpp —— 第一部分交付的自实现算法（原样导入）
@@ -50,12 +55,18 @@ target_include_directories(st_network PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
 # ---------------------------------------------------------------------------
 add_library(st_crypto STATIC
         src/common/random.cpp
+        src/common/console.cpp
         src/crypto/aes.cpp
         src/crypto/cmac.cpp
         src/crypto/placeholder_mac_engine.cpp
         src/crypto/mock_crypto_provider.cpp
         src/crypto/aes_crypto_provider.cpp)
 target_include_directories(st_crypto PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# Windows 下 BCryptGenRandom 需要显式链接 bcrypt（Linux 侧不链接任何库）
+if(WIN32)
+    target_link_libraries(st_crypto PUBLIC bcrypt)
+endif()
 
 # ---------------------------------------------------------------------------
 # 协议层：统一数据包格式 + 握手转录串
@@ -130,6 +141,11 @@ find_package(OpenSSL QUIET)
 if(OpenSSL_FOUND)
     add_executable(crypto_benchmark tools/crypto_benchmark.cpp)
     target_link_libraries(crypto_benchmark PRIVATE st_crypto OpenSSL::Crypto)
+    # 该工具刻意使用 OpenSSL 的经典 CMAC_* 接口（与虚拟机里的 OpenSSL 1.1.1 行为一致）；
+    # 在 OpenSSL 3.x 上这些接口被标记为“已弃用”，这里只对这一个目标关闭该提示。
+    if(NOT MSVC)
+        target_compile_options(crypto_benchmark PRIVATE -Wno-deprecated-declarations)
+    endif()
     message(STATUS "已启用 crypto_benchmark（OpenSSL ${OPENSSL_VERSION}）")
 else()
     message(STATUS "未找到 OpenSSL，跳过 crypto_benchmark（仅影响性能对比工具）")

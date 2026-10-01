@@ -201,6 +201,15 @@ ST_TEST_CASE("Network: 超大或非法的 Frame 会被拒绝，且不影响后�
 }
 
 ST_TEST_CASE("Network: Linux 上同一端口重复 listen 会失败") {
+#if defined(_WIN32)
+    // 平台差异：Windows 的 SO_REUSEADDR 语义与 POSIX 不同——它允许第二个 socket
+    // 绑定到已经被监听的端口，因此这里无法断言“重复 listen 必定失败”。
+    // 项目当前在 Windows 上沿用 SO_REUSEADDR（保证服务端重启后能立刻重新绑定端口），
+    // 该差异记录在 Part2_transfer.md 的“平台差异”一节。
+    Network first;
+    ST_CHECK(first.listen(0));
+    ST_CHECK(first.isListening());
+#else
     Network first;
     ST_CHECK(first.listen(0));
     const uint16_t port = first.boundPort();
@@ -208,6 +217,7 @@ ST_TEST_CASE("Network: Linux 上同一端口重复 listen 会失败") {
     Network second;
     ST_CHECK(!second.listen(port));
     ST_CHECK(second.lastResult() == Network::Result::SOCKET_FAILURE);
+#endif
 }
 
 int main() {

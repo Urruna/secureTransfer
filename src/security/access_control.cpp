@@ -12,7 +12,7 @@
 
 #include "common/log.h"
 
-namespace access {
+namespace acl {
 
 namespace {
 
@@ -296,4 +296,4 @@ std::string AccessController::policySummary() const {
     return oss.str();
 }
 
-}  // namespace access
+}  // namespace acl

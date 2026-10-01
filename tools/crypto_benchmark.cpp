@@ -98,8 +98,21 @@ std::string humanSize(std::size_t bytes) {
     return oss.str();
 }
 
-/// 读取 /proc/cpuinfo，判断 CPU 是否提供 AES-NI 指令集。
+/// 判断 CPU 是否提供 AES-NI 指令集。
+/// Linux ：读 /proc/cpuinfo 的 flags 行；
+/// Windows：没有 /proc/cpuinfo，改用编译器内建能力检测（MinGW/GCC、Clang 均支持）。
 std::string cpuAesCapability() {
+#if defined(_WIN32)
+#if defined(__GNUC__) || defined(__clang__)
+    __builtin_cpu_init();
+    if (__builtin_cpu_supports("aes") != 0) {
+        return "支持 AES-NI（OpenSSL 会自动使用硬件加速）";
+    }
+    return "不支持 AES-NI（OpenSSL 只能用软件实现）";
+#else
+    return "未知（当前编译器不支持 CPU 能力检测）";
+#endif
+#else
     std::ifstream cpuinfo("/proc/cpuinfo");
     std::string line;
     while (std::getline(cpuinfo, line)) {
@@ -108,6 +121,7 @@ std::string cpuAesCapability() {
         }
     }
     return "不支持 AES-NI（OpenSSL 也只能用软件实现）";
+#endif
 }
 
 std::string environmentNote() {

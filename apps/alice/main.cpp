@@ -34,6 +34,7 @@
 #include "common/hex.h"
 #include "common/log.h"
 #include "common/types.h"
+#include "common/console.h"
 #include "application/file_transfer.h"
 #include "crypto/aes_crypto_provider.h"
 #include "crypto/mac_engine.h"
@@ -138,7 +139,7 @@ std::string crcHex(std::uint32_t value) {
 /// 本地加载访问控制策略（仅用于提示；服务端才是裁决方）。
 /// 找不到策略文件时返回 false，但**不影响**程序继续运行。
 bool tryLoadPolicyAdvisory(const std::string& explicitPath,
-                           access::AccessController& controller,
+                           acl::AccessController& controller,
                            std::string& usedPath) {
     std::string error;
     std::string warning;
@@ -165,6 +166,7 @@ bool tryLoadPolicyAdvisory(const std::string& explicitPath,
 }  // namespace
 
 int main(int argc, char** argv) {
+    stconsole::ensureUtf8();
     stlog::initFromEnvironment();
 
     std::string host = "127.0.0.1";
@@ -254,7 +256,7 @@ int main(int argc, char** argv) {
     std::cout << "=======================================================" << std::endl;
 
     // 访问控制：本地只做提示（服务端才是裁决方）
-    access::AccessController accessController;
+    acl::AccessController accessController;
     std::string policyUsed;
     const bool hasPolicy = tryLoadPolicyAdvisory(policyPath, accessController, policyUsed);
     if (hasPolicy) {
@@ -358,11 +360,11 @@ int main(int argc, char** argv) {
 
             // 本地提示：策略显示没权限时给出预警，但仍然发送（由服务端裁决）
             if (hasPolicy) {
-                const access::Operation operation =
-                    item.isImage ? access::Operation::kSendImage : access::Operation::kSendFile;
+                const acl::Operation operation =
+                    item.isImage ? acl::Operation::kSendImage : acl::Operation::kSendFile;
                 if (!accessController.isAllowed(config.localId, operation)) {
                     std::cout << "  [本地提示] 角色 " << accessController.roleOf(config.localId)
-                              << " 缺少权限 " << access::operationToString(operation)
+                              << " 缺少权限 " << acl::operationToString(operation)
                               << "，服务端预计会拒绝" << std::endl;
                 }
             }

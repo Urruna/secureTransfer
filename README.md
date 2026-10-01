@@ -2,14 +2,20 @@
 
 > 课程项目《安全的信息传输套件》的工程实现。
 > 本仓库当前覆盖 **第一部分（AES 成果的接入与回归）** 与 **第二部分（安全通信协议与网络）**；
-> 第三部分（UI / 文件 / 图像 / 访问控制 / Eve 演示界面）尚未实现，接口已预留。
+> 第三部分（UI / 文件 / 图像 / 访问控制 / Eve 演示界面）已在
+> `apps/ui/`、`src/application/`、`src/security/access_control.cpp` 中实现并实测；
+> 另外本项目**已从 Linux 运行环境迁移到 Windows**（MSYS2 MinGW-w64），
+> 两端各有一套实测数据（见 `Part2_transfer.md` §23）。
 
-**验证状态（2026-09-26/27，Ubuntu 20.04 虚拟机）**：
-`cmake .. && cmake --build .` 编译通过（`-Wall -Wextra` 无警告），
-`ctest` **12 个测试程序全部通过**；Alice 与 Bob 通过 TCP 完成
-「完整握手 + 4 条测试消息 + 双向确认」；篡改 / 伪造 / 重放 / 窃听四项安全测试全部通过；
-密码算法与 OpenSSL 完成 1 KB ~ 100 MB 的性能对比（含"禁用 AES-NI 的纯软件对比"）；
-两台独立主机之间的局域网通信测试通过（附 ARP 与 TCP 抓包证据）。
+**验证状态**
+
+| 环境 | 编译 | 测试 | 端到端 | 备注 |
+| --- | --- | --- | --- | --- |
+| Ubuntu 20.04 虚拟机（Ubuntu6.21，g++ 9.4.0） | 0 错误 0 警告 | `ctest` **16/16** | 4 条测试消息 + 4 个文件/图像逐字节一致 | 局域网双机 + 抓包证据；性能对比（OpenSSL 1.1.1） |
+| Windows 主机（MSYS2 MinGW-w64，g++ 16.2.0） | 0 错误 0 警告 | `ctest` **16/16** | 4 条测试消息 + 4 个文件/图像逐字节一致 | 跨系统双机（Windows Alice ↔ Ubuntu Bob，双向）；性能对比（OpenSSL 3.6.5）；**Qt 界面未编译（主机缺 Qt SDK）** |
+
+篡改 / 伪造 / 重放 / 窃听四项安全测试在两端全部通过；
+密码算法与 OpenSSL 完成 1 KB ~ 100 MB 的性能对比（含"禁用 AES-NI 的纯软件对比"）。
 
 **想了解什么，看哪个文件：**
 
@@ -23,6 +29,7 @@
 | **文件与图像传输（要求 9）与实验数据** | **[`docs/file_transfer.md`](docs/file_transfer.md)**、[`experiment_data/`](experiment_data/)    |
 | **访问控制（要求 7）**                 | **[`docs/access_control.md`](docs/access_control.md)**                             |
 | **图形界面（要求 8）与截图**           | **[`docs/ui.md`](docs/ui.md)**、[`docs/screenshots/`](docs/screenshots/README.md) |
+| **Windows 迁移：改了什么、两端实测数据** | **[`Part2_transfer.md`](Part2_transfer.md) 的 §23（M2–M6）**                   |
 | 课程要求逐条对照                             | [`docs/requirements.md`](docs/requirements.md)                                           |
 | 协议格式与流程细节                           | [`docs/protocol.md`](docs/protocol.md)、[`docs/interfaces.md`](docs/interfaces.md)      |
 
@@ -95,7 +102,10 @@ Alice 和 Bob 只能通过不安全的网络通信，Eve 可以窃听、篡改�
 | 局域网 / 双机测试           | ✅ 已完成（`scripts/lan_test.sh`）               | 两台独立主机 + 抓包证据；真机双机命令见`docs/lan_test.md`                   |
 | 文件 / 图像传输             | ✅ 已完成（`src/application/`）                  | 分块 + 单包两条路径，含整文件 CRC32 校验与实验数据：`docs/file_transfer.md` |
 | 访问控制（Role/Permission） | ✅ 已完成（`src/security/access_control.cpp`）   | 策略可配置、服务端权威判定、审计日志：`docs/access_control.md`              |
-| Qt/图形界面                 | ✅ 已完成（`apps/ui/`，Qt 5.12 Widgets）         | 需要`qtbase5-dev`；截图见 `docs/screenshots/`，说明见 `docs/ui.md`      |
+| Qt/图形界面                 | ✅ Linux 已完成（`apps/ui/`，Qt 5.12 Widgets）   | 需要`qtbase5-dev`；截图见 `docs/screenshots/`，说明见 `docs/ui.md`    |
+| Windows 侧编译与测试 | ✅ 已完成（MSYS2 MinGW-w64） | 0 错误 0 警告，`ctest` 16/16；见 `Part2_transfer.md` §23.3 |
+| Windows 侧 Qt 界面 | ⛔ 未完成 | 主机只有 Qt Creator、没有 Qt SDK；方案与决策点见 `Part2_transfer.md` §23.8 |
+| 跨系统双机（Windows ↔ Ubuntu） | ✅ 已完成（双向） | 两个方向各跑完整会话，接收文件 sha256 逐字节一致；见 `Part2_transfer.md` §23.6 |
 | 前向保密                    | 不支持                                             | 预共享密钥方案的固有限制（`K_master` 泄露则历史会话可解）                   |
 | 抗 DoS                      | 不设计                                             | 未认证的 HELLO 也会被处理                                                     |
 
@@ -189,6 +199,27 @@ cd /home/securityTransfer/build && ./alice 127.0.0.1 9000
 ```bash
 bash scripts/capture_eve.sh 9000 "Hello Bob"
 ```
+
+### 4.1 Windows（MSYS2 MinGW-w64）
+
+```bash
+# 在 MSYS2 的 MinGW64 shell 中执行
+cd /d/AppGallery/codex/Urruna_codex_OS/projects/securityTransfer
+cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build-win -j8
+ctest --test-dir build-win --output-on-failure
+
+./build-win/bob.exe 9000
+./build-win/alice.exe 127.0.0.1 9000
+```
+
+说明：
+
+* Windows 用 `build-win/`，Linux 用 `build/`，两者都在 `.gitignore` 里，互不干扰；
+* 控制台中文不会乱码（程序启动时自动把代码页切到 UTF-8）；
+* 需要 MSYS2 的 `mingw-w64-x86_64-gcc / cmake / ninja`；性能对比工具还需要 `mingw-w64-x86_64-openssl`；
+* Qt 界面（`st_ui`）在 Windows 上**尚未编译**：找不到 Qt5 时 CMake 会自动跳过该目标，
+  不影响 `alice` / `bob` 与全部测试（原因与可选方案见 `Part2_transfer.md` §23.8）。
 
 ## 5. 关键设计决策（写报告时可以直接引用）
 

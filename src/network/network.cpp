@@ -18,8 +18,15 @@
 #include <climits>
 #include <cstring>
 #include <sstream>
+#include <system_error>
 #include <utility>
 
+#if defined(_WIN32)
+// Windows：Winsock2（注意 winsock2.h 必须早于 windows.h）
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#else
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -28,6 +35,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
+#endif
 
 #include "common/log.h"
 
@@ -38,11 +46,31 @@ const char* const kLogModule = "Network";
 /// listen() 的 backlog。演示阶段只需要一个客户端。
 constexpr int kListenBacklog = 1;
 
-/// POSIX 下 socket 就是一个文件描述符。
-using SocketHandle = int;
+// ---------------------------------------------------------------------------
+//  平台差异集中在这一段：Windows 用 Winsock2，Linux 用 POSIX socket。
+//  上层（Network 的各个方法）只通过下面的小工具函数访问平台能力。
+// ---------------------------------------------------------------------------
+#if defined(_WIN32)
+// Windows 用 SD_BOTH 表示同时关闭收发
+const int kShutdownBoth = SD_BOTH;
+using SocketHandle = SOCKET;
+const SocketHandle kInvalidHandle = INVALID_SOCKET;
 
-/// 无效描述符。
+/// 进程内初始化一次 Winsock（静态对象，在 main 之前构造）。
+struct WinsockGuard {
+    WinsockGuard() {
+        WSADATA data;
+        (void)::WSAStartup(MAKEWORD(2, 2), &data);
+    }
+    ~WinsockGuard() { ::WSACleanup(); }
+};
+const WinsockGuard kWinsockGuard;
+#else
+/// POSIX 下 socket 就是一个文件描述符。
+const int kShutdownBoth = SHUT_RDWR;
+using SocketHandle = int;
 const SocketHandle kInvalidHandle = -1;
+#endif
 
 SocketHandle toHandle(std::intptr_t value) {
     return static_cast<SocketHandle>(value);
@@ -52,32 +80,52 @@ std::intptr_t toIntptr(SocketHandle handle) {
     return static_cast<std::intptr_t>(handle);
 }
 
+#if defined(_WIN32)
+/// 取最近一次 socket 错误码（Windows 用 WSAGetLastError）。
+int lastSocketError() {
+    return ::WSAGetLastError();
+}
+bool isInterrupted(int code) {
+    return code == WSAEINTR;
+}
+bool isTimeout(int code) {
+    return code == WSAEWOULDBLOCK || code == WSAETIMEDOUT;
+}
+bool isPeerGone(int code) {
+    return code == WSAECONNRESET || code == WSAECONNABORTED || code == WSAENOTCONN ||
+           code == WSAESHUTDOWN;
+}
+std::string describeError(int code) {
+    std::ostringstream oss;
+    oss << "WSA error " << code << " (" << std::system_category().message(code) << ")";
+    return oss.str();
+}
+void closeSocket(SocketHandle handle) {
+    ::closesocket(handle);
+}
+#else
 /// POSIX 下 socket 错误码就是 errno。
 int lastSocketError() {
     return errno;
 }
-
-/// 错误码是否表示被信号打断，需要重试。
 bool isInterrupted(int code) {
     return code == EINTR;
 }
-
-/// 错误码是否表示超时（设置了 SO_RCVTIMEO / SO_SNDTIMEO）。
 bool isTimeout(int code) {
     return code == EAGAIN || code == EWOULDBLOCK || code == ETIMEDOUT;
 }
-
-/// 错误码是否表示对端已经关闭或复位了连接。
 bool isPeerGone(int code) {
     return code == ECONNRESET || code == EPIPE || code == ECONNABORTED || code == ENOTCONN;
 }
-
-/// 把错误码格式化成便于排查问题的文本。
 std::string describeError(int code) {
     std::ostringstream oss;
     oss << "errno " << code << " (" << std::strerror(code) << ")";
     return oss.str();
 }
+void closeSocket(SocketHandle handle) {
+    ::close(handle);
+}
+#endif
 
 /// send() 的附加标志：避免对端断开时进程被 SIGPIPE 直接杀死。
 #if defined(MSG_NOSIGNAL)
@@ -198,7 +246,7 @@ bool Network::connect(const std::string& host, uint16_t port) {
         }
 
         lastFailure = "connect() 失败: " + describeError(lastSocketError());
-        ::close(handle);
+        closeSocket(handle);
     }
 
     ::freeaddrinfo(results);
@@ -242,14 +290,14 @@ bool Network::listen(uint16_t port) {
 
     if (::bind(handle, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
         const std::string reason = describeError(lastSocketError());
-        ::close(handle);
+        closeSocket(handle);
         return fail(Result::SOCKET_FAILURE,
                     "bind() 失败，端口 " + std::to_string(port) + " 可能已被占用: " + reason);
     }
 
     if (::listen(handle, kListenBacklog) != 0) {
         const std::string reason = describeError(lastSocketError());
-        ::close(handle);
+        closeSocket(handle);
         return fail(Result::SOCKET_FAILURE, "listen() 失败: " + reason);
     }
 
@@ -300,7 +348,7 @@ bool Network::accept() {
     // 演示阶段只服务单个客户端：如果已有连接，先关闭旧连接。
     if (connectionSocket_ != kInvalidSocket) {
         ST_LOG_WARN(kLogModule, "已有连接存在，关闭旧连接后接受新连接");
-        ::close(toHandle(connectionSocket_));
+        closeSocket(toHandle(connectionSocket_));
         connectionSocket_ = kInvalidSocket;
     }
 
@@ -499,9 +547,15 @@ bool Network::applyTimeout(bool forReceive, int timeoutMs) {
     const SocketHandle handle = toHandle(connectionSocket_);
     const int option = forReceive ? SO_RCVTIMEO : SO_SNDTIMEO;
 
+#if defined(_WIN32)
+    const DWORD value = static_cast<DWORD>(timeoutMs);   // Windows 用毫秒
+#else
     timeval value;
+#endif
+#if !defined(_WIN32)
     value.tv_sec = timeoutMs / 1000;
     value.tv_usec = static_cast<suseconds_t>((timeoutMs % 1000) * 1000);
+#endif
 
     if (::setsockopt(handle, SOL_SOCKET, option, reinterpret_cast<const char*>(&value),
                      sizeof(value)) != 0) {
@@ -525,15 +579,15 @@ bool Network::setSendTimeoutMs(int timeoutMs) {
 
 void Network::close() {
     if (listenSocket_ != kInvalidSocket) {
-        ::close(toHandle(listenSocket_));
+        closeSocket(toHandle(listenSocket_));
         listenSocket_ = kInvalidSocket;
         ST_LOG_DEBUG(kLogModule, "listening socket closed");
     }
 
     if (connectionSocket_ != kInvalidSocket) {
         // 先 shutdown 再 close，让对端立即感知到连接结束。
-        ::shutdown(toHandle(connectionSocket_), SHUT_RDWR);
-        ::close(toHandle(connectionSocket_));
+        ::shutdown(toHandle(connectionSocket_), kShutdownBoth);
+        closeSocket(toHandle(connectionSocket_));
         connectionSocket_ = kInvalidSocket;
         ST_LOG_INFO(kLogModule, "connection closed");
     }

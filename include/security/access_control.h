@@ -32,7 +32,7 @@
 #include "common/types.h"
 #include "protocol/message_type.h"
 
-namespace access {
+namespace acl {
 
 /// 受保护的操作（应用层能看到的最小动作集合）。
 enum class Operation : Byte {
@@ -123,6 +123,6 @@ private:
     std::size_t deniedCount_ = 0;
 };
 
-}  // namespace access
+}  // namespace acl
 
 #endif  // SECURETRANSFER_SECURITY_ACCESS_CONTROL_H

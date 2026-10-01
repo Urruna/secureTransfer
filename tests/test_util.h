@@ -11,6 +11,7 @@
 #ifndef SECURETRANSFER_TESTS_TEST_UTIL_H
 #define SECURETRANSFER_TESTS_TEST_UTIL_H
 
+#include <cstdlib>
 #include <exception>
 #include <functional>
 #include <iostream>
@@ -19,7 +20,33 @@
 #include <utility>
 #include <vector>
 
+#include "common/console.h"
+#include "common/path_utils.h"
+
 namespace testutil {
+
+/// 跨平台临时目录：Windows 用 %TEMP%，Linux 用 /tmp。
+inline std::string tempDir() {
+#if defined(_WIN32)
+    const char* base = std::getenv("TEMP");
+    std::string dir = (base != nullptr && *base != '\0') ? base : std::string(".");
+    for (char& c : dir) {
+        if (c == '\\') {
+            c = '/';
+        }
+    }
+    return dir + "/st_tests";
+#else
+    return "/tmp/st_tests";
+#endif
+}
+
+/// 取一个已经创建好的工作子目录。
+inline std::string workDir(const std::string& name) {
+    const std::string dir = tempDir() + "/" + name;
+    (void)ensureDirectory(dir);
+    return dir;
+}
 
 /// 断言失败时抛出的异常。
 class Failure : public std::exception {
@@ -80,6 +107,7 @@ std::string describe(const T& value) {
 }
 
 inline int runAll(const std::string& suiteName) {
+    ::stconsole::ensureUtf8();
     int failed = 0;
     const std::size_t total = registry().size();
 

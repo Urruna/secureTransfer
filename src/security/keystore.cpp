@@ -5,7 +5,9 @@
 
 #include "security/keystore.h"
 
+#if !defined(_WIN32)
 #include <sys/stat.h>
+#endif
 
 #include <cctype>
 #include <fstream>
@@ -116,6 +118,13 @@ bool KeyStore::loadFile(const std::string& path,
 }
 
 bool KeyStore::checkFilePermissions(const std::string& path, std::string& warning) {
+#if defined(_WIN32)
+    // Windows 没有 POSIX 权限位语义：密钥文件的访问控制由 NTFS ACL 负责，
+    // 这里不做检查（避免对每个密钥文件都误报“权限过宽”）。
+    (void)path;
+    warning.clear();
+    return true;
+#else
     struct stat info {};
     if (::stat(path.c_str(), &info) != 0) {
         warning = "无法读取文件权限: " + path;
@@ -127,6 +136,7 @@ bool KeyStore::checkFilePermissions(const std::string& path, std::string& warnin
         return false;
     }
     return true;
+#endif
 }
 
 std::string KeyStore::keyFingerprint(const Key128& key) {

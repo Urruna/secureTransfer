@@ -23,6 +23,12 @@
 #include <sstream>
 #include <string>
 
+// Windows 的 <windows.h> 会把 ERROR 定义成数值宏，与我们下面的 stlog::Level::ERROR 冲突；
+// 这里先取消该宏（本工程不需要 Win32 的 ERROR 常量）。
+#ifdef ERROR
+#undef ERROR
+#endif
+
 namespace stlog {
 
 /// 日志级别，数值越大越严重。

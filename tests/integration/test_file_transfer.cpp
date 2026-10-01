@@ -27,11 +27,10 @@
 
 namespace {
 
-const std::string kWorkDir = "/tmp/st_file_transfer_test";
+const std::string kWorkDir = testutil::workDir("st_file_transfer_test");
 
 void ensureDir(const std::string& dir) {
-    const int rc = std::system(("mkdir -p '" + dir + "'").c_str());
-    (void)rc;
+    (void)ensureDirectory(dir);
 }
 
 Bytes makeData(std::size_t size, std::uint32_t seed) {

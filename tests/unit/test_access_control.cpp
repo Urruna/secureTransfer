@@ -35,8 +35,8 @@ const char* const kPolicyText =
     "[role:guest]\n"
     "permissions = send_message\n";
 
-access::AccessController makeController() {
-    access::AccessController controller;
+acl::AccessController makeController() {
+    acl::AccessController controller;
     std::string error;
     ST_CHECK(controller.loadText(kPolicyText, error));
     return controller;
@@ -46,7 +46,7 @@ access::AccessController makeController() {
 
 // 1. 角色解析
 ST_TEST_CASE("access: 身份到角色的映射") {
-    const access::AccessController controller = makeController();
+    const acl::AccessController controller = makeController();
     ST_CHECK_EQ(controller.roleOf("alice"), std::string("admin"));
     ST_CHECK_EQ(controller.roleOf("eve"), std::string("user"));
     ST_CHECK_EQ(controller.roleOf("mallory"), std::string("guest"));
@@ -56,36 +56,36 @@ ST_TEST_CASE("access: 身份到角色的映射") {
 
 // 2. 判定矩阵
 ST_TEST_CASE("access: 允许 / 拒绝判定矩阵") {
-    const access::AccessController controller = makeController();
+    const acl::AccessController controller = makeController();
 
     // 管理员：全部允许
-    ST_CHECK(controller.isAllowed("alice", access::Operation::kSendMessage));
-    ST_CHECK(controller.isAllowed("alice", access::Operation::kSendFile));
-    ST_CHECK(controller.isAllowed("alice", access::Operation::kSendImage));
-    ST_CHECK(controller.isAllowed("alice", access::Operation::kViewLog));
-    ST_CHECK(controller.isAllowed("alice", access::Operation::kManageUsers));
+    ST_CHECK(controller.isAllowed("alice", acl::Operation::kSendMessage));
+    ST_CHECK(controller.isAllowed("alice", acl::Operation::kSendFile));
+    ST_CHECK(controller.isAllowed("alice", acl::Operation::kSendImage));
+    ST_CHECK(controller.isAllowed("alice", acl::Operation::kViewLog));
+    ST_CHECK(controller.isAllowed("alice", acl::Operation::kManageUsers));
 
     // 普通用户：能发消息/文件/图像，不能看日志、不能管用户
-    ST_CHECK(controller.isAllowed("eve", access::Operation::kSendMessage));
-    ST_CHECK(controller.isAllowed("eve", access::Operation::kSendFile));
-    ST_CHECK(controller.isAllowed("eve", access::Operation::kSendImage));
-    ST_CHECK(!controller.isAllowed("eve", access::Operation::kViewLog));
-    ST_CHECK(!controller.isAllowed("eve", access::Operation::kManageUsers));
+    ST_CHECK(controller.isAllowed("eve", acl::Operation::kSendMessage));
+    ST_CHECK(controller.isAllowed("eve", acl::Operation::kSendFile));
+    ST_CHECK(controller.isAllowed("eve", acl::Operation::kSendImage));
+    ST_CHECK(!controller.isAllowed("eve", acl::Operation::kViewLog));
+    ST_CHECK(!controller.isAllowed("eve", acl::Operation::kManageUsers));
 
     // 访客：只能发短消息
-    ST_CHECK(controller.isAllowed("mallory", access::Operation::kSendMessage));
-    ST_CHECK(!controller.isAllowed("mallory", access::Operation::kSendFile));
-    ST_CHECK(!controller.isAllowed("mallory", access::Operation::kSendImage));
-    ST_CHECK(!controller.isAllowed("mallory", access::Operation::kViewLog));
+    ST_CHECK(controller.isAllowed("mallory", acl::Operation::kSendMessage));
+    ST_CHECK(!controller.isAllowed("mallory", acl::Operation::kSendFile));
+    ST_CHECK(!controller.isAllowed("mallory", acl::Operation::kSendImage));
+    ST_CHECK(!controller.isAllowed("mallory", acl::Operation::kViewLog));
 
     // 未登记身份 = 访客权限（默认拒绝更严格的操作）
-    ST_CHECK(controller.isAllowed("unregistered", access::Operation::kSendMessage));
-    ST_CHECK(!controller.isAllowed("unregistered", access::Operation::kSendFile));
+    ST_CHECK(controller.isAllowed("unregistered", acl::Operation::kSendMessage));
+    ST_CHECK(!controller.isAllowed("unregistered", acl::Operation::kSendFile));
 }
 
 // 3. 权限集合的可读输出
 ST_TEST_CASE("access: 权限集合输出") {
-    const access::AccessController controller = makeController();
+    const acl::AccessController controller = makeController();
     const std::string admin = controller.permissionsOf("alice").toString();
     ST_CHECK(admin.find("send_message") != std::string::npos);
     ST_CHECK(admin.find("view_log") != std::string::npos);
@@ -102,7 +102,7 @@ ST_TEST_CASE("access: 权限集合输出") {
 
 // 4. 非法策略必须被拒绝（默认拒绝原则）
 ST_TEST_CASE("access: 非法策略被拒绝") {
-    access::AccessController controller;
+    acl::AccessController controller;
     std::string error;
 
     // 未知权限名
@@ -128,47 +128,47 @@ ST_TEST_CASE("access: 非法策略被拒绝") {
 
 // 5. 角色未定义权限 → 无权限（最小权限）
 ST_TEST_CASE("access: 角色未定义权限时无权限") {
-    access::AccessController controller;
+    acl::AccessController controller;
     std::string error;
     ST_CHECK(controller.loadText(
         "[default]\nrole = guest\n[identity]\nalice = ghost\n[role:guest]\n"
         "permissions = send_message\n",
         error));
     // alice 的角色 ghost 没有定义 → 无任何权限
-    ST_CHECK(!controller.isAllowed("alice", access::Operation::kSendMessage));
-    ST_CHECK(!controller.isAllowed("alice", access::Operation::kSendFile));
+    ST_CHECK(!controller.isAllowed("alice", acl::Operation::kSendMessage));
+    ST_CHECK(!controller.isAllowed("alice", acl::Operation::kSendFile));
 }
 
 // 6. 消息类型 → 操作 的映射
 ST_TEST_CASE("access: 消息类型映射到受保护操作") {
-    access::Operation operation = access::Operation::kManageUsers;
+    acl::Operation operation = acl::Operation::kManageUsers;
 
-    ST_CHECK(access::operationFromMessageType(MessageType::kData, operation));
-    ST_CHECK(operation == access::Operation::kSendMessage);
+    ST_CHECK(acl::operationFromMessageType(MessageType::kData, operation));
+    ST_CHECK(operation == acl::Operation::kSendMessage);
 
-    ST_CHECK(access::operationFromMessageType(MessageType::kFileStart, operation));
-    ST_CHECK(operation == access::Operation::kSendFile);
-    ST_CHECK(access::operationFromMessageType(MessageType::kFileChunk, operation));
-    ST_CHECK(operation == access::Operation::kSendFile);
-    ST_CHECK(access::operationFromMessageType(MessageType::kFileEnd, operation));
-    ST_CHECK(operation == access::Operation::kSendFile);
+    ST_CHECK(acl::operationFromMessageType(MessageType::kFileStart, operation));
+    ST_CHECK(operation == acl::Operation::kSendFile);
+    ST_CHECK(acl::operationFromMessageType(MessageType::kFileChunk, operation));
+    ST_CHECK(operation == acl::Operation::kSendFile);
+    ST_CHECK(acl::operationFromMessageType(MessageType::kFileEnd, operation));
+    ST_CHECK(operation == acl::Operation::kSendFile);
 
-    ST_CHECK(access::operationFromMessageType(MessageType::kImage, operation));
-    ST_CHECK(operation == access::Operation::kSendImage);
+    ST_CHECK(acl::operationFromMessageType(MessageType::kImage, operation));
+    ST_CHECK(operation == acl::Operation::kSendImage);
 
     // 会话控制类消息不属于受保护操作
-    ST_CHECK(!access::operationFromMessageType(MessageType::kClose, operation));
-    ST_CHECK(!access::operationFromMessageType(MessageType::kHello, operation));
-    ST_CHECK(!access::operationFromMessageType(MessageType::kError, operation));
+    ST_CHECK(!acl::operationFromMessageType(MessageType::kClose, operation));
+    ST_CHECK(!acl::operationFromMessageType(MessageType::kHello, operation));
+    ST_CHECK(!acl::operationFromMessageType(MessageType::kError, operation));
 }
 
 // 7. 审计记录
 ST_TEST_CASE("access: 审计记录与计数") {
-    access::AccessController controller = makeController();
+    acl::AccessController controller = makeController();
 
-    controller.record("alice", access::Operation::kSendFile, true, "test_file_1MB.bin");
-    controller.record("mallory", access::Operation::kSendFile, false, "test_file_1MB.bin");
-    controller.record("mallory", access::Operation::kSendMessage, true, "");
+    controller.record("alice", acl::Operation::kSendFile, true, "test_file_1MB.bin");
+    controller.record("mallory", acl::Operation::kSendFile, false, "test_file_1MB.bin");
+    controller.record("mallory", acl::Operation::kSendMessage, true, "");
 
     ST_CHECK_EQ(controller.allowedCount(), 2u);
     ST_CHECK_EQ(controller.deniedCount(), 1u);
@@ -186,13 +186,13 @@ ST_TEST_CASE("access: 审计记录与计数") {
 
 // 8. 审计日志写文件
 ST_TEST_CASE("access: 审计日志写入文件") {
-    const std::string path = "/tmp/st_access_test.log";
+    const std::string path = testutil::tempDir() + "/access_test.log";
     (void)std::remove(path.c_str());
 
-    access::AccessController controller = makeController();
+    acl::AccessController controller = makeController();
     std::string error;
     ST_CHECK(controller.setAuditLogFile(path, error));
-    controller.record("eve", access::Operation::kViewLog, false, "尝试查看日志");
+    controller.record("eve", acl::Operation::kViewLog, false, "尝试查看日志");
 
     std::ifstream in(path);
     ST_CHECK(in.good());

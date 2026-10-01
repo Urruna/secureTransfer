@@ -18,6 +18,8 @@
 
 #include "main_window.h"
 
+#include "common/console.h"
+
 namespace {
 
 /// 打印用法（中文说明，便于演示时直接照着敲）。
@@ -47,6 +49,7 @@ void printUsage() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    stconsole::ensureUtf8();
     QApplication app(argc, argv);
     QApplication::setApplicationName("SecureTransfer");
     QApplication::setApplicationDisplayName("SecureTransfer — 安全的信息传输套件");

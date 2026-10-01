@@ -27,6 +27,7 @@
 #include "security/access_control.h"
 #include "common/hex.h"
 #include "common/log.h"
+#include "common/console.h"
 #include "common/demo_reply.h"
 #include "common/types.h"
 #include "crypto/aes_crypto_provider.h"
@@ -101,7 +102,7 @@ std::string crcHex(std::uint32_t value) {
 }
 
 /// 在若干候选路径中查找访问控制策略文件。
-bool loadPolicy(const std::string& explicitPath, access::AccessController& controller,
+bool loadPolicy(const std::string& explicitPath, acl::AccessController& controller,
                 std::string& usedPath) {
     std::string error;
     std::string warning;
@@ -145,6 +146,7 @@ bool parseCommand(const Bytes& body, std::string& command) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    stconsole::ensureUtf8();
     stlog::initFromEnvironment();
 
     std::uint16_t port = 9000;
@@ -218,7 +220,7 @@ int main(int argc, char** argv) {
     std::cout << "=====================================================" << std::endl;
 
     // ---------------- 访问控制策略（服务端权威判定）----------------
-    access::AccessController accessController;
+    acl::AccessController accessController;
     std::string policyUsed;
     if (!loadPolicy(policyPath, accessController, policyUsed)) {
         return EXIT_FAILURE;
@@ -274,8 +276,8 @@ int main(int argc, char** argv) {
 
         // ---------------- 访问控制：先判定，再执行 ----------------
         // 身份取自**握手时认证过的对端标识**（config.peerId），不是客户端自称
-        access::Operation operation = access::Operation::kSendMessage;
-        const bool protectedOperation = access::operationFromMessageType(type, operation);
+        acl::Operation operation = acl::Operation::kSendMessage;
+        const bool protectedOperation = acl::operationFromMessageType(type, operation);
 
         // 被拒绝的传输只剩数据块与结束包，静默丢弃（保证不落盘）
         if (droppingTransfer &&
@@ -295,14 +297,14 @@ int main(int argc, char** argv) {
             accessController.record(config.peerId, operation, false, "服务端判定无权限");
             std::cout << "【访问控制拒绝】身份 " << config.peerId << "（角色 "
                       << accessController.roleOf(config.peerId) << "）尝试 "
-                      << access::operationToString(operation) << " —— 已拒绝，未执行" << std::endl;
+                      << acl::operationToString(operation) << " —— 已拒绝，未执行" << std::endl;
             if (type == MessageType::kFileStart || type == MessageType::kImage) {
                 droppingTransfer = true;
             }
             (void)session.sendMessage(
                 MessageType::kData,
                 stringToBytes(std::string("ACCESS DENIED: ") +
-                              access::operationToString(operation) + " 需要更高权限（当前角色 " +
+                              acl::operationToString(operation) + " 需要更高权限（当前角色 " +
                               accessController.roleOf(config.peerId) + "）"));
             continue;  // 会话保持可用（与篡改/重放导致断连不同）
         }
@@ -319,8 +321,8 @@ int main(int argc, char** argv) {
                     stringToBytes("ROLE " + accessController.roleOf(config.peerId) + " : " +
                                   accessController.permissionsOf(config.peerId).toString()));
             } else if (command == "VIEW_LOG") {
-                if (!accessController.isAllowed(config.peerId, access::Operation::kViewLog)) {
-                    accessController.record(config.peerId, access::Operation::kViewLog, false,
+                if (!accessController.isAllowed(config.peerId, acl::Operation::kViewLog)) {
+                    accessController.record(config.peerId, acl::Operation::kViewLog, false,
                                             "尝试查看审计日志");
                     ++denials;
                     std::cout << "【访问控制拒绝】" << config.peerId << " 尝试 view_log" << std::endl;
@@ -329,7 +331,7 @@ int main(int argc, char** argv) {
                         stringToBytes("ACCESS DENIED: view_log 仅管理员可用（当前角色 " +
                                       accessController.roleOf(config.peerId) + "）"));
                 } else {
-                    accessController.record(config.peerId, access::Operation::kViewLog, true, "");
+                    accessController.record(config.peerId, acl::Operation::kViewLog, true, "");
                     const auto& decisions = accessController.recentDecisions();
                     std::string reply = "AUDIT LOG (最近 " + std::to_string(decisions.size()) +
                                         " 条, 允许 " +

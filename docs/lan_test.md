@@ -176,3 +176,55 @@ ST_SUDO_PW=xxxx bash scripts/lan_test.sh --netns
 | 要求 7：安全协议在真实网络下工作 | 跨主机的完整握手、密钥分发、加密数据传输全部成功 |
 | 要求 9（预留）：支持多种信息 | 同一通道内传输了文本、长文本、中文 UTF-8 与二进制数据 |
 | Eve 攻击演示的背景 | 抓包文件可直接用于演示“Eve 只能看到密文” |
+
+---
+
+## 8. 附加：跨操作系统双机测试（Windows ↔ Ubuntu，2026-10-01）
+
+项目迁移到 Windows 之后，又补做了一组**真正跨操作系统**的双机测试：
+一台是 Windows 主机（物理机，MSYS2 MinGW-w64 构建），另一台是 Ubuntu 20.04 虚拟机
+（`g++ 9.4.0` 构建），两者通过 VMware 的 VMnet8 虚拟局域网互通。
+
+| 项 | 值 |
+| --- | --- |
+| Windows 主机地址 | `192.168.111.1`（VMware Network Adapter VMnet8） |
+| Ubuntu 虚拟机地址 | `192.168.111.139` |
+| 密钥指纹（两端一致） | `8409fd42b2df5cb3` |
+
+**方向 A：Windows 上的 Alice → Ubuntu 上的 Bob**
+
+```text
+alice.exe 192.168.111.139 9800 --quiet --whoami --file test_file_64KB.bin --image test_image_256x256.png
+
+安全会话已建立。SessionId = 8d06811d4dfb3c4a
+对端确认    : FILE OK test_file_64KB.bin (65536 字节, CRC32=0x1f50c2e7)
+对端确认    : FILE OK test_image_256x256.png (147133 字节, CRC32=0xe30eac16)
+=== 4 条测试消息 + 2 个文件/图像 全部安全传输成功 ===
+应用层吞吐  : 54.51 MB/s
+```
+
+**方向 B：Ubuntu 上的 Alice → Windows 上的 Bob**
+
+```text
+./alice 192.168.111.1 9801 --quiet --file test_file_64KB.bin
+
+[INFO] [Network] TCP connected to 192.168.111.1:9801
+安全会话已建立。SessionId = 9b4aff3f40ee0f01
+对端确认    : FILE OK test_file_64KB.bin (65536 字节, CRC32=0x1f50c2e7)
+=== 4 条测试消息 + 1 个文件/图像 全部安全传输成功 ===
+应用层吞吐  : 28.28 MB/s
+```
+
+**接收端逐字节校验（sha256）**
+
+```text
+test_file_64KB.bin        5eb4ca70d0ee472b...（源文件 / VM 侧 received_lan/ / 主机侧 received_lan_win/ 三者一致）
+test_image_256x256.png    f8ea510fbcb5e006...（源文件 / VM 侧 received_lan/ 一致）
+```
+
+结论：**同一套协议、同一份密钥配置，在两个不同操作系统、两套不同编译器/库版本之间
+仍然可以完成完整握手、加密传输、CRC32 与 sha256 双重校验**——说明协议设计本身是平台无关的，
+迁移只影响平台适配层（见 `Part2_transfer.md` §23.5）。
+
+> 提示：如果在受限沙箱 / 安全软件拦截的环境里运行，`connect()` 可能直接返回
+> `WSAEACCES (10013)`，看起来像"网络不通"。这不是程序缺陷，换到正常权限的环境即可复现成功。

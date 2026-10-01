@@ -166,7 +166,7 @@ void SessionWorker::run(UiConfig config) {
     }
 
     // ---------------- 2. 访问控制策略 ----------------
-    access::AccessController accessController;
+    acl::AccessController accessController;
     std::string policyError;
     std::string policyWarning;
     if (!accessController.loadFile(config.policyFile.toStdString(), policyError, policyWarning)) {
@@ -250,7 +250,7 @@ void SessionWorker::run(UiConfig config) {
             }
             if (command.kind == CommandKind::kSendText) {
                 const Bytes body = stringToBytes(command.text.toStdString());
-                if (accessController.isAllowed(sessionConfig.localId, access::Operation::kSendMessage)) {
+                if (accessController.isAllowed(sessionConfig.localId, acl::Operation::kSendMessage)) {
                     if (session.sendMessage(MessageType::kData, body)) {
                         emit messageReceived("我 → 对端", command.text, static_cast<int>(body.size()));
                     } else {
@@ -276,14 +276,14 @@ void SessionWorker::run(UiConfig config) {
             if (command.kind == CommandKind::kSendFile) {
                 const transfer::Kind kind = command.isImage ? transfer::Kind::kImage
                                                             : transfer::Kind::kFile;
-                const access::Operation operation = command.isImage
-                                                        ? access::Operation::kSendImage
-                                                        : access::Operation::kSendFile;
+                const acl::Operation operation = command.isImage
+                                                        ? acl::Operation::kSendImage
+                                                        : acl::Operation::kSendFile;
                 if (!accessController.isAllowed(sessionConfig.localId, operation)) {
                     emit logLine(QString("【访问控制】本端角色 %1 无权限 %2，已拒绝发送（服务端也会拒绝）")
                                      .arg(QString::fromStdString(accessController.roleOf(
                                          sessionConfig.localId)))
-                                     .arg(access::operationToString(operation)));
+                                     .arg(acl::operationToString(operation)));
                     emit transferFinished(false, "本地策略拒绝：没有发送权限");
                     continue;
                 }
@@ -365,8 +365,8 @@ void SessionWorker::run(UiConfig config) {
         }
 
         // 5.3 访问控制：服务端权威判定
-        access::Operation operation = access::Operation::kSendMessage;
-        const bool protectedOperation = access::operationFromMessageType(type, operation);
+        acl::Operation operation = acl::Operation::kSendMessage;
+        const bool protectedOperation = acl::operationFromMessageType(type, operation);
         if (droppingTransfer &&
             (type == MessageType::kFileChunk || type == MessageType::kFileEnd)) {
             if (type == MessageType::kFileEnd) {
@@ -388,11 +388,11 @@ void SessionWorker::run(UiConfig config) {
                              .arg(config.peerId)
                              .arg(QString::fromStdString(
                                  accessController.roleOf(sessionConfig.peerId)))
-                             .arg(access::operationToString(operation)));
+                             .arg(acl::operationToString(operation)));
             (void)session.sendMessage(
                 MessageType::kData,
                 stringToBytes(std::string("ACCESS DENIED: ") +
-                              access::operationToString(operation) + " 需要更高权限（当前角色 " +
+                              acl::operationToString(operation) + " 需要更高权限（当前角色 " +
                               accessController.roleOf(sessionConfig.peerId) + "）"));
             emit statsUpdated(QString::fromStdString(session.stats().summary()));
             continue;
@@ -412,8 +412,8 @@ void SessionWorker::run(UiConfig config) {
                                   accessController.permissionsOf(sessionConfig.peerId).toString()));
                 emit logLine("已回应 WHOAMI 查询");
             } else if (cmd == "VIEW_LOG") {
-                if (!accessController.isAllowed(sessionConfig.peerId, access::Operation::kViewLog)) {
-                    accessController.record(sessionConfig.peerId, access::Operation::kViewLog, false,
+                if (!accessController.isAllowed(sessionConfig.peerId, acl::Operation::kViewLog)) {
+                    accessController.record(sessionConfig.peerId, acl::Operation::kViewLog, false,
                                             "尝试查看审计日志");
                     (void)session.sendMessage(
                         MessageType::kData,
@@ -421,7 +421,7 @@ void SessionWorker::run(UiConfig config) {
                                       accessController.roleOf(sessionConfig.peerId) + "）"));
                     emit logLine("【访问控制拒绝】对端尝试查看审计日志（权限不足）");
                 } else {
-                    accessController.record(sessionConfig.peerId, access::Operation::kViewLog, true, "");
+                    accessController.record(sessionConfig.peerId, acl::Operation::kViewLog, true, "");
                     const auto& decisions = accessController.recentDecisions();
                     std::string reply = "AUDIT LOG (最近 " + std::to_string(decisions.size()) +
                                         " 条，允许 " +

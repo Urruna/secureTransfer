@@ -28,7 +28,7 @@
 
 namespace {
 
-const std::string kWorkDir = "/tmp/st_access_test";
+const std::string kWorkDir = testutil::workDir("st_access_test");
 
 const char* const kPolicyText =
     "[default]\n"
@@ -42,8 +42,7 @@ const char* const kPolicyText =
     "permissions = send_message\n";
 
 void ensureDir(const std::string& dir) {
-    const int rc = std::system(("mkdir -p '" + dir + "'").c_str());
-    (void)rc;
+    (void)ensureDirectory(dir);
 }
 
 Bytes makeData(std::size_t size, std::uint32_t seed) {
@@ -94,7 +93,7 @@ void runServer(SessionConfig config, std::string outDir, ServerResult* result) {
     }
     result->handshakeOk = true;
 
-    access::AccessController access;
+    acl::AccessController access;
     std::string error;
     if (!access.loadText(kPolicyText, error)) {
         result->error = "策略加载失败: " + error;
@@ -119,8 +118,8 @@ void runServer(SessionConfig config, std::string outDir, ServerResult* result) {
             break;
         }
 
-        access::Operation operation = access::Operation::kSendMessage;
-        const bool protectedOperation = access::operationFromMessageType(type, operation);
+        acl::Operation operation = acl::Operation::kSendMessage;
+        const bool protectedOperation = acl::operationFromMessageType(type, operation);
 
         // 传输进行中：被拒绝的传输只剩数据块与结束包，直接丢弃（不落盘）
         if (droppingTransfer && (type == MessageType::kFileChunk || type == MessageType::kFileEnd)) {
@@ -141,7 +140,7 @@ void runServer(SessionConfig config, std::string outDir, ServerResult* result) {
             }
             (void)session.sendMessage(
                 MessageType::kData,
-                stringToBytes(std::string("ACCESS DENIED: ") + access::operationToString(operation) +
+                stringToBytes(std::string("ACCESS DENIED: ") + acl::operationToString(operation) +
                               " 角色 " + access.roleOf(peer) + " 无此权限"));
             continue;
         }

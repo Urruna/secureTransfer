@@ -24,11 +24,10 @@
 
 namespace {
 
-const std::string kWorkDir = "/tmp/st_transfer_test";
+const std::string kWorkDir = testutil::workDir("st_transfer_test");
 
 void ensureWorkDir() {
-    const int rc = std::system(("mkdir -p " + kWorkDir).c_str());
-    (void)rc;
+    (void)ensureDirectory(kWorkDir);
 }
 
 Bytes makeData(std::size_t size, std::uint32_t seed) {
@@ -143,7 +142,7 @@ ST_TEST_CASE("transfer_meta: 非法输入被拒绝") {
     ST_CHECK(!transfer::isSafeFileName("a\\b.txt"));
 
     // 类型推断与路径取基本名
-    ST_CHECK(transfer::kindFromExtension("/tmp/x/photo.PNG") == transfer::Kind::kImage);
+    ST_CHECK(transfer::kindFromExtension("x/photo.PNG") == transfer::Kind::kImage);
     ST_CHECK(transfer::kindFromExtension("photo.jpeg") == transfer::Kind::kImage);
     ST_CHECK(transfer::kindFromExtension("data.bin") == transfer::Kind::kFile);
     ST_CHECK_EQ(transfer::baseName("/a/b/c.txt"), std::string("c.txt"));
