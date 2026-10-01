@@ -223,6 +223,9 @@ ctest --test-dir build-win --output-on-failure
   找不到 Qt5 时 CMake 会自动跳过该目标，不影响 `alice` / `bob` 与全部测试。
   运行 `st_ui.exe` 前要把 `D:\AppGallery\dev-tools\msys64\mingw64\bin` 加进 `PATH`
   （否则会因缺少 `Qt5Core.dll` 等报 `0xC0000135`）。
+  嫌麻烦就直接**双击项目根目录的 `run_ui_build.bat`**：它只在当前窗口临时设好 PATH，
+  然后启动 `build-win\st_ui.exe`（不改系统环境变量，也可带参数，如
+  `run_ui_build.bat --server --port 9000`）。
 
 ### 4.2 Windows 打包（脱离 MSYS2 独立运行）
 
