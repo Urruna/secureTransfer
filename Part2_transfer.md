@@ -2060,3 +2060,37 @@ OpenSSL（仅性能对比工具需要）、Wireshark（替代 tcpdump）、Pytho
 3. **沙箱/容器环境会带来"文件所有者"问题**：git 的 `safe.directory` 检查、
    以及某些工具的所有权校验，都可能在"文件能被读写但仍被拒绝"的情况下出现——
    先分清楚是**权限**问题还是**所有权校验**问题，再决定改 ACL 还是加例外。
+
+## 22.5 Windows 侧环境与 M1 结果（2026-10-01 实测）
+
+**环境**
+
+| 项目 | 结果 |
+| --- | --- |
+| Git | Git for Windows **2.47.1**，安装于 `D:\AppGallery\Git` |
+| 工具链 | MSYS2 安装于 **`D:\AppGallery\dev-tools\msys64`**；`g++ 16.2.0`、`CMake 4.4.3`、`Ninja 1.13.2` |
+| Qt | ⚠ 主机上**只有 Qt Creator（IDE，6.0.1），没有 Qt SDK**（注册表中无 Qt 版本、无 qmake；全盘找到的 `Qt5Core.dll` 都是 Autodesk/华为应用市场/腾讯会议自带的）。因此 Qt 改用 **MSYS2 的 `mingw-w64-x86_64-qt5`**（与 g++ 同一套 ABI，且我们的代码就是 Qt5 API，CMake 无需改动） |
+| 其它 | Wireshark、Python 已装（用户提供） |
+
+**M1 结果（只编译与平台无关的部分）**
+
+用一份临时 CMake 工程（仅列出以下源文件，不依赖 Network）在 `-Wall -Wextra` 下编译并运行：
+
+```text
+编译：g++ 16.2.0，0 警告 0 错误
+
+1/4 test_aes_cmac      Passed   0.20 sec   ← FIPS-197 单分组 + NIST SP 800-38A CTR + RFC 4493 四条 CMAC 向量
+2/4 test_packet        Passed   0.14 sec   ← 数据包编解码 / 边界 / 非法输入
+3/4 test_transcript    Passed   0.17 sec   ← 握手转录串、域分离、防反射、TLV 无歧义
+4/4 test_replay_guard  Passed   0.17 sec   ← 防重放（含 wouldAccept 不推进水位）
+
+100% tests passed out of 4
+```
+
+**结论**：自写的 AES/CMAC 在 Windows（MSVC 之外的 MinGW-w64 16.2）上**与标准向量完全一致**，
+协议层中与平台无关的部分（数据包、转录串、防重放）也全部通过——
+说明后续网络层移植只涉及"平台适配"，不涉及算法与协议逻辑。
+
+**M2 要考虑的一个细节**：主机上的 CMake 是 **4.x**，而项目 `CMakeLists.txt` 里写的是
+`cmake_minimum_required(VERSION 3.10)`；CMake 4 对过低的版本声明会报错/告警，
+M2 时需要把它提升到 3.16（Linux 侧的 CMake 3.16 也满足）。
