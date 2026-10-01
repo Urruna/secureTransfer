@@ -1,6 +1,6 @@
 ## Windows 图形界面发布包（课程项目《安全的信息传输套件》）
 
-下载 `securityTransfer-ui-win64.zip`（32.18 MB），解压后即可运行，
+下载 `securityTransfer-ui-win64.zip`（约 32 MB），解压后即可运行，
 **无需安装 Qt / MSYS2 / 编译器**。
 
 ### 快速开始
@@ -18,8 +18,11 @@
 
 ### 校验
 
-* 大小：`32.18 MB`
-* SHA-256：`9797A04B7AB9CC4C507C00AD6967D40C0BE487D4F5110B23BE80DB6F3984C10A`
+* 大小：约 32 MB（解压后约 75 MB）；
+* SHA-256：**以 Release 附件里的 `sha256.txt` 为准**（每次构建都会重新生成，
+  硬编码在文档里容易过期）；
+* 校验方式：`certutil -hashfile securityTransfer-ui-win64.zip SHA256`（Windows）
+  或 `sha256sum securityTransfer-ui-win64.zip`（Linux）。
 
 ### 说明
 
@@ -27,5 +30,5 @@
 * 首次运行若被 SmartScreen 拦截，选择“更多信息 → 仍要运行”；
 * 仓库为私有仓库，下载前需要用有权限的 GitHub 账号登录；
 * 功能说明、测试与攻击演示证据见 README 与 `Part2_transfer.md`；
-* 这个包由 `.github/workflows/windows-ui.yml` 在发布 Release 时自动生成并挂载，
-  下次发版时本文件会被 CI 用新的校验值覆盖（见工作流）。
+* 这个包由 `.github/workflows/windows-ui.yml` 在**发布 Release 时自动构建并挂载**
+  （同时附上 `sha256.txt`）：维护者只需要打 tag、发 Release，其余交给 CI。
