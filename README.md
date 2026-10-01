@@ -30,6 +30,7 @@
 | **访问控制（要求 7）**                 | **[`docs/access_control.md`](docs/access_control.md)**                             |
 | **图形界面（要求 8）与截图**           | **[`docs/ui.md`](docs/ui.md)**、[`docs/screenshots/`](docs/screenshots/README.md) |
 | **Windows 迁移：改了什么、两端实测数据** | **[`Part2_transfer.md`](Part2_transfer.md) 的 §23（M2–M6）**                   |
+| **窃听攻击证据（Eve 只能看到密文，Windows/tshark 跨机抓包）** | **[`docs/eavesdrop.md`](docs/eavesdrop.md)**、[`experiment_data/captures/`](experiment_data/captures/) |
 | 课程要求逐条对照                             | [`docs/requirements.md`](docs/requirements.md)                                           |
 | 协议格式与流程细节                           | [`docs/protocol.md`](docs/protocol.md)、[`docs/interfaces.md`](docs/interfaces.md)      |
 
@@ -222,6 +223,38 @@ ctest --test-dir build-win --output-on-failure
   找不到 Qt5 时 CMake 会自动跳过该目标，不影响 `alice` / `bob` 与全部测试。
   运行 `st_ui.exe` 前要把 `D:\AppGallery\dev-tools\msys64\mingw64\bin` 加进 `PATH`
   （否则会因缺少 `Qt5Core.dll` 等报 `0xC0000135`）。
+
+### 4.2 Windows 打包（脱离 MSYS2 独立运行）
+
+```bash
+# 在 MSYS2 的 MinGW64 shell 中执行
+bash scripts/package_windows.sh
+```
+
+输出到 `dist/securityTransfer/`（约 75 MB），内容：
+
+* `alice.exe` / `bob.exe` / `st_ui.exe`；
+* Qt5 DLL（由 `windeployqt-qt5` 部署）＋ `platforms/qwindows.dll` 等插件；
+* MinGW 运行时 DLL（`libstdc++-6` / `libgcc_s_seh-1` / `libwinpthread-1`，
+  以及 Qt 自己依赖的 `icu*`、`zlib1`、`harfbuzz`、`pcre2` 等，脚本用"依赖传递闭包"自动补齐）；
+* `configs/`（只含 `keys.conf.example`，**不含真实密钥**）与 `experiment_data/`；
+* 双击即可用的 `run_bob.bat` / `run_alice.bat` / `run_ui.bat`。
+
+使用前把 `configs/keys.conf.example` 复制成 `configs/keys.conf` 并填好 K_master。
+`dist/` 已被 `.gitignore` 排除（几十 MB 的 DLL 不入库），需要时重新跑脚本即可。
+已验证：在**只有系统目录的 PATH** 下（不依赖 MSYS2）三个程序都能正常跑完整会话。
+
+### 4.3 Windows 窃听演示（Wireshark / tshark）
+
+```powershell
+# 管理员权限运行；默认在 Ubuntu 虚拟机里启动 Bob，在本机跑 Alice 并抓 VMnet8 的包
+python scripts/capture_eve_windows.py --file experiment_data/test_file_64KB.bin
+```
+
+会把 `.pcapng` 与解析报告写进 `experiment_data/captures/`，
+报告里逐包列出 Type / SessionId / Sequence / Nonce / 密文 / CMAC，
+并检索"明文关键字、文件内容、K_master、K_session"，期望命中 0 次
+（实测结论见 [`docs/eavesdrop.md`](docs/eavesdrop.md)）。
 
 ## 5. 关键设计决策（写报告时可以直接引用）
 

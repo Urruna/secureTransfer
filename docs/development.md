@@ -228,6 +228,21 @@ sudo tcpdump -U -i lo -X port 9101 -w /tmp/eve.pcap
 strings /tmp/eve.pcap | grep -c "Hello Bob"      # 期望 0
 ```
 
+### 7.1 Windows 侧（Wireshark / tshark）
+
+迁移到 Windows 之后，用 Wireshark 的命令行 `tshark` 抓**跨机**的包
+（Windows Alice ↔ Ubuntu 虚拟机 Bob），并在报告里逐包解出
+Type / SessionId / Sequence / Nonce / 密文 / CMAC：
+
+```powershell
+# 管理员运行（抓包需要 Npcap 权限）
+python scripts/capture_eve_windows.py --file experiment_data/test_file_64KB.bin
+```
+
+产物在 `experiment_data/captures/`（`.pcapng` + 自动生成的 `.txt` 报告），
+实测结论见 [`docs/eavesdrop.md`](eavesdrop.md)：
+明文 / 文件内容 / K_master / K_session 检索命中次数全部为 0。
+
 ## 8. 独立交叉验证（可选，证明"协议用对了算法"）
 
 虚拟机自带 OpenSSL 1.1.1f，可用它独立验算我们自己的实现：

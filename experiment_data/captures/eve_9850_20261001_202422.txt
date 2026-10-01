@@ -1,0 +1,55 @@
+# Eve 窃听演示报告（Windows / tshark）
+
+* 抓包文件：`experiment_data/captures/eve_9850_20261001_202422.pcapng`
+* 抓包时间：2026-10-01 20:24:33
+* 抓包网卡：\Device\NPF_{8DBED713-C5B4-4711-AF19-2EB45CD9A619}
+* 端口：9850
+* 抓包文件大小：74308 字节
+* 捕获帧数：75
+* 其中带 TCP 载荷的段：63
+* 解出的 SecureTransfer 数据包：20
+
+## 1. Eve 能看到什么（协议字段解析）
+
+按线上格式 `Magic(2) Version(1) Type(1) Direction(1) SessionId(8) Sequence(8) Nonce(16) PayloadLen(4) Body(N) MacTag(16)` 解出来的前若干个包：
+
+| # | 方向 | 类型 | SessionId | Sequence | Nonce | Body(密文) 长度 | Body 前 16 字节 | CMAC 前 16 字节 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | C→S | HELLO | ef199c594cf2d7c8 | 0 | 2adb67f64058a953… | 7 | 0005616c696365… | 0000000000000000… |
+| 2 | C→S | AUTH | ef199c594cf2d7c8 | 0 | 2adb67f64058a953… | 0 | … | 678ad9c0b3bf9d5a… |
+| 3 | C→S | KEY_REQUEST | ef199c594cf2d7c8 | 0 | 2adb67f64058a953… | 0 | … | 64b63ba5bf9411ce… |
+| 4 | C→S | KEY_CONFIRM | ef199c594cf2d7c8 | 0 | 2adb67f64058a953… | 0 | … | 73924a8441905349… |
+| 5 | C→S | DATA | ef199c594cf2d7c8 | 1 | 9d63b294d2c2539a… | 10 | 320969a169cbaff2f189… | 4cb47b5eea0fd92c… |
+| 6 | C→S | DATA | ef199c594cf2d7c8 | 2 | 9d63b294d2c2539a… | 39 | 03e07e6136214a76848c1a70f972b17e… | 82723615ce4124c8… |
+| 7 | C→S | DATA | ef199c594cf2d7c8 | 3 | 9d63b294d2c2539a… | 75 | 75998111cfab0b1a5cad1f3524abad73… | 95c27357bb7c38ec… |
+| 8 | C→S | DATA | ef199c594cf2d7c8 | 4 | 9d63b294d2c2539a… | 85 | f9f9e6e3e400a7f36d8c94cf685c827d… | 0b0333219755ee71… |
+| 9 | C→S | FILE_START | ef199c594cf2d7c8 | 5 | 9d63b294d2c2539a… | 39 | 2a987b20f19a30df3b0ecc3392697f45… | c90d4082cc73e4e1… |
+| 10 | C→S | FILE_CHUNK | ef199c594cf2d7c8 | 6 | 9d63b294d2c2539a… | 65536 | c37995a53ee578ad7a36b04d8d44b196… | 85573c62a5381b1c… |
+| 11 | C→S | FILE_END | ef199c594cf2d7c8 | 7 | 9d63b294d2c2539a… | 12 | 06592a5d3218c97c03a6914c… | 4a4535a06d6d59fd… |
+| 12 | C→S | CLOSE | ef199c594cf2d7c8 | 8 | 9d63b294d2c2539a… | 0 | … | 7f38f073d639f7c4… |
+
+其中**加密的业务数据包**（DATA / FILE_* / IMAGE / CLOSE）共 13 个，握手包（HELLO…KEY_CONFIRM_ACK）共 7 个。
+
+## 2. Eve 不应该看到什么（明文与密钥检索）
+
+直接在**整个抓包文件**的原始字节里检索：
+
+| 检索目标 | 类型 | 命中次数 | 期望 | 结果 |
+| --- | --- | --- | --- | --- |
+| 明文关键字 `Hello Bob!` | 测试消息明文 | 0 | 0 | ✅ 通过 |
+| 明文关键字 `A secure message between Alice and Bob.` | 测试消息明文 | 0 | 0 | ✅ 通过 |
+| 明文关键字 `Transfer #1024` | 测试消息明文 | 0 | 0 | ✅ 通过 |
+| 明文关键字 `你好，Bob` | 测试消息明文 | 0 | 0 | ✅ 通过 |
+| 发送文件的前 64 字节（test_file_64KB.bin） | 文件内容明文 | 0 | 0 | ✅ 通过 |
+| K_master（0f1e2d3c4b5a69788796a5b4c3d2e1f0） | 长期密钥 | 0 | 0 | ✅ 通过 |
+| K_session（000102…0f） | 会话密钥 | 0 | 0 | ✅ 通过 |
+
+### 说明：为什么握手阶段能看到身份字符串
+
+HELLO / HELLO_ACK 的 Body 里带 `alice` / `bob` 身份标识（用于构造认证转录串），此时双方还没有会话密钥，因此这一部分是**明文 + CMAC**（协议设计如此，与 TLS 握手里的身份信息同理）。**业务数据（消息 / 文件 / 图像）全部是密文**，上表已经证明检索不到任何业务明文。
+
+## 3. 结论
+
+1. Eve 能看到：TCP 数据包、Ciphertext、Nonce、Sequence、CMAC —— 与课程预期一致；
+2. Eve 看不到：业务明文、K_session、K_master —— 检索命中次数全部为 0；
+3. 因此 AES-128-CTR 提供了机密性保护，而 CMAC 让篡改可被发现（见攻击测试）。

@@ -2504,3 +2504,131 @@ Alice/Bob 演示：4 条测试消息全部成功
    服务端仍然是 `acceptOneClient()` 一次性接受一个客户端（与命令行版一致）；
 3. 对端关闭时 `select()` 也一样报"可读"，这是 TCP 的语义；
    调用方必须像界面那样把 `kClosed` 当作会话结束，而不是"有数据"。
+
+---
+
+# 25. 第十轮：Windows 打包分发与 Wireshark 窃听证据（2026-10-01）
+
+## 25.1 为什么要打包
+
+前面几轮跑程序都要先进 MSYS2 的 MinGW64 shell（或者手动把
+`D:\AppGallery\dev-tools\msys64\mingw64\bin` 加进 `PATH`），否则会报
+`0xC0000135`（找不到 DLL）。演示时不可能每次都开 MSYS2，所以需要一个
+**双击就能运行**的目录。
+
+新增脚本 **`scripts/package_windows.sh`**（在 MSYS2 MinGW64 shell 里运行）：
+
+```bash
+bash scripts/package_windows.sh            # → dist/securityTransfer/
+bash scripts/package_windows.sh /d/demo    # 或指定输出目录
+```
+
+它依次做六件事：
+
+1. `cmake --build build-win`（Release）；
+2. 复制 `alice.exe` / `bob.exe` / `st_ui.exe`；
+3. `windeployqt-qt5.exe` 部署 Qt5 DLL 与插件；
+4. **依赖传递闭包**：反复扫描 dist 里所有 PE 文件的导入表，
+   凡是 `D:\AppGallery\dev-tools\msys64\mingw64\bin` 里有的 DLL 就复制进来，
+   直到不再出现新依赖；
+5. 复制 `configs/`（**只带 `keys.conf.example`，不带真实密钥**）与 `experiment_data/`；
+6. 生成 `run_bob.bat` / `run_alice.bat` / `run_ui.bat`（CRLF 换行）。
+
+### 打包过程中踩到的三个坑（都写进了脚本注释）
+
+| 坑 | 现象 | 处理 |
+| --- | --- | --- |
+| `windeployqt` 的临时目录 | 报 `Unable to query qmake: Error creating stdout temporary file` | 脚本把 `TMPDIR/TEMP/TMP` 指向 `build-win/package-tmp` |
+| `windeployqt` 缺可选依赖就提前退出 | `libGLESv2.dll does not exist` 后返回非零码，`set -e` 直接中断 | 不因它中断；**但**它退出前没来得及复制插件，所以脚本加了 3.1 步校验并补齐 `platforms/qwindows.dll`（少了它 Qt 程序根本起不来） |
+| Qt5 DLL 自己还缺 MinGW 运行时 | 只补 `libstdc++/libgcc/winpthread` 仍然 `0xC0000135`，因为 `Qt5Core` 还依赖 `icu*`、`zlib1`、`harfbuzz`、`pcre2`、`double-conversion`、`zstd`、`png16`、`md4c`… | 改成"依赖传递闭包"自动补齐，并加 4.1 步校验（MSYS2 里有、dist 里没有 = 真的缺） |
+
+### 实测结果
+
+```text
+输出目录：dist/securityTransfer（75 MB，30 个 DLL + 3 个 exe + 插件目录 + 配置 + 数据）
+4.1 依赖校验：所有非系统依赖都已打包
+
+干净 PATH 测试（PATH 只留 C:\Windows\System32;C:\Windows，完全不依赖 MSYS2）：
+  st_ui.exe --help          → 正常打印中文用法（说明 Qt 平台插件加载成功）
+  bob.exe + alice.exe       → 完整握手 + 4 条消息 + 64 KB 文件，sha256 一致
+```
+
+> 注意：发布包**故意不带** `configs/keys.conf`（里面有 K_master）。
+> 使用者需要把它复制成 `keys.conf` 并填好；`run_*.bat` 会先 `cd` 到包目录，
+> 这样程序按 `configs/keys.conf` 就能找到密钥文件。
+
+## 25.2 Wireshark 窃听证据（Windows + tshark）
+
+### 为什么不在本机 loopback 上抓
+
+更贴近课程描述的"经 Internet 传输"：让 **Bob 跑在 Ubuntu 621 虚拟机**里，
+**Alice 跑在 Windows 主机**上，用 tshark 抓 **VMnet8**（主机 `192.168.111.1` ↔
+虚拟机 `192.168.111.139`）这条真实链路的包。
+
+### 新增工具
+
+**`scripts/capture_eve_windows.py`**（Python，管理员运行，抓包需要 Npcap 权限）：
+
+```powershell
+python scripts/capture_eve_windows.py --file experiment_data/test_file_64KB.bin
+python scripts/capture_eve_windows.py --local      # Bob 跑本机
+python scripts/capture_eve_windows.py --analyze-only <已有的 pcapng>
+```
+
+它自己完成：自动选网卡（找 VMnet8）→ 用 vmrun 在虚拟机里后台启动 Bob →
+`tshark -i <网卡> -f "tcp port 9850" -a duration:25 -w *.pcapng` 抓包 →
+本机运行 Alice（4 条测试消息 + 1 个 64 KB 文件）→ 停止抓包 →
+**按 `[4 字节长度][Packet]` 重组 TCP 流并逐包解出协议字段** →
+在原始抓包字节里检索明文与密钥 → 写报告。
+
+### 抓包结果（`experiment_data/captures/eve_9850_20261001_202422.pcapng`）
+
+```text
+75 帧 / 63 个带 TCP 载荷的段 / 解出 20 个 SecureTransfer 数据包
+其中：加密业务数据包 13 个（DATA×4、FILE_START、FILE_CHUNK(65536)、FILE_END、CLOSE、以及 Bob 的确认）
+      握手包 7 个（HELLO / HELLO_ACK / AUTH / KEY_REQUEST / KEY_EXCHANGE / KEY_CONFIRM / KEY_CONFIRM_ACK）
+```
+
+解出来的前 12 个包（节选）：
+
+| # | 方向 | 类型 | SessionId | Sequence | Nonce（前 8 字节） | 密文长度 | 密文前 8 字节 | CMAC 前 8 字节 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | C→S | HELLO | ef199c594cf2d7c8 | 0 | 2adb67f64058a953 | 7 | `0005616c696365` | `0000000000000000` |
+| 2 | C→S | AUTH | ef199c594cf2d7c8 | 0 | 2adb67f64058a953 | 0 | — | `678ad9c0b3bf9d5a` |
+| 4 | C→S | KEY_CONFIRM | ef199c594cf2d7c8 | 0 | 2adb67f64058a953 | 0 | — | `73924a8441905349` |
+| 5 | C→S | DATA | ef199c594cf2d7c8 | 1 | 9d63b294d2c2539a | 10 | `320969a169cbaff2f189` | `4cb47b5eea0fd92c` |
+| 7 | C→S | DATA | ef199c594cf2d7c8 | 3 | 9d63b294d2c2539a | 75 | `75998111cfab0b1a5cad1f3524abad73` | `95c27357bb7c38ec` |
+| 10 | C→S | FILE_CHUNK | ef199c594cf2d7c8 | 6 | 9d63b294d2c2539a | 65536 | `c37995a53ee578ad7a36b04d8d44b196` | `85573c62a5381b1c` |
+| 11 | C→S | FILE_END | ef199c594cf2d7c8 | 7 | 9d63b294d2c2539a | 12 | `06592a5d3218c97c03a6914c` | `4a4535a06d6d59fd` |
+
+**明文 / 密钥检索（在整个抓包文件的原始字节里）**
+
+| 检索目标 | 命中次数 | 期望 |
+| --- | --- | --- |
+| `Hello Bob!` | 0 | 0 ✅ |
+| `A secure message between Alice and Bob.` | 0 | 0 ✅ |
+| `Transfer #1024` | 0 | 0 ✅ |
+| `你好，Bob`（UTF-8） | 0 | 0 ✅ |
+| 文件 `test_file_64KB.bin` 的前 64 字节 | 0 | 0 ✅ |
+| `K_master`（`0f1e…e1f0`） | 0 | 0 ✅ |
+| `K_session`（`000102…0f`） | 0 | 0 ✅ |
+
+**一个需要如实说明的细节**：HELLO 的 Body 是
+`00 05 61 6c 69 63 65` = TLV `"alice"`，也就是**握手阶段的身份标识是明文**
+（此时还没有 K_session，身份要参与转录串与 CMAC，与 TLS 握手的身份信息同理）。
+业务数据从 DATA 开始一律是密文——上表已用"明文检索 0 命中"证明。
+
+结论：**Eve 能看到 TCP 包、Ciphertext、Nonce、Sequence、CMAC；看不到业务明文、
+K_session、K_master**——与 `project_q1.md` §9.1 的预期完全一致。
+
+完整报告（由脚本自动生成）与抓包文件都已入库：
+`experiment_data/captures/eve_9850_20261001_202422.{pcapng,txt}`，
+说明文档见 `docs/eavesdrop.md`。
+
+## 25.3 仍然保留的取舍
+
+1. `dist/` 里的 DLL 有 75 MB，**不入库**（重新跑一次脚本只要十几秒）；
+2. 打包脚本目前只处理 MinGW/Qt5 这套工具链；如果以后要换 MSVC，
+   需要额外复制 VC 运行时（`vcredist`）；
+3. 抓包脚本默认连虚拟机里的 Bob（需要 VMware 与 vmrun）；
+   没有虚拟机时用 `--local` 也能复现，只是抓的是本机回环。

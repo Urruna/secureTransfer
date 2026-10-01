@@ -33,6 +33,7 @@ experiment_data/access_log*.txt
 # Windows 侧可能出现的构建产物与 IDE 文件
 out/
 build-msvc/
+dist/
 .vs/
 *.user
 *.ilk
