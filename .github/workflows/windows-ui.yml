@@ -1,0 +1,101 @@
+# ============================================================================
+#  Windows UI 发布包（对应课程要求 8：图形界面）
+#
+#  触发时机：
+#    * push 到 main（只关心源码 / 脚本 / 本工作流的改动）→ 构建并上传 artifact；
+#    * 手动 workflow_dispatch                        → 同上，方便随时出包；
+#    * 发布 Release（published）                     → 构建并**自动把 zip 挂到该 Release**。
+#
+#  这样"同步"就是自动的：改代码 → 跑 CI → artifact 更新；
+#  打一个 tag 发 Release → 访客从 Releases 页面直接下载最新界面。
+# ============================================================================
+name: Windows UI 发布包
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'apps/**'
+      - 'tests/**'
+      - 'tools/**'
+      - 'scripts/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/windows-ui.yml'
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write      # 发布 Release 时需要（上传附件）
+
+jobs:
+  build-ui-package:
+    name: 构建 Windows 发布包
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}     # 后续 run 步骤都在 MSYS2 的 MinGW64 shell 里执行
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 MSYS2 工具链（gcc / cmake / ninja / Qt5）
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-qt5
+
+      - name: 编译并打包（scripts/package_windows.sh）
+        run: bash scripts/package_windows.sh
+
+      - name: 依赖完整性检查（不允许缺非系统 DLL）
+        run: |
+          DIST=dist/securityTransfer
+          missing=0
+          for dll in $(find "$DIST" -type f \( -name '*.exe' -o -name '*.dll' \) \
+                       -exec objdump -p {} \; 2>/dev/null | awk '/DLL Name:/ {print $3}' | sort -u); do
+            [ -f "$DIST/$dll" ] && continue
+            if [ -f "/mingw64/bin/$dll" ]; then
+              echo "缺少依赖：$dll"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] && echo "依赖检查通过"
+          test "$missing" -eq 0
+
+      - name: 压缩为 zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/securityTransfer -DestinationPath securityTransfer-ui-win64.zip -Force
+
+      - name: 记录 SHA-256
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash securityTransfer-ui-win64.zip -Algorithm SHA256).Hash
+          $size = [math]::Round((Get-Item securityTransfer-ui-win64.zip).Length / 1MB, 2)
+          "SHA256=$hash" | Tee-Object -FilePath sha256.txt
+          "SIZE_MB=$size" | Tee-Object -FilePath size.txt -Append
+
+      - name: 上传构建产物（artifact）
+        uses: actions/upload-artifact@v4
+        with:
+          name: securityTransfer-ui-win64
+          path: |
+            securityTransfer-ui-win64.zip
+            sha256.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: 发布 Release 时把 zip 挂到该 Release
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" securityTransfer-ui-win64.zip sha256.txt --clobber
