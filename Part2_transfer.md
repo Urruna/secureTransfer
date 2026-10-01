@@ -106,6 +106,33 @@
 >   现已用 `ACK:` 前缀约定修复（`include/common/demo_reply.h`）。
 >
 > 详细内容见 **§21「第六轮：图形界面」**，专项文档见 `docs/ui.md`。
+>
+> ---
+>
+> ## 【2026-10-01 第七次更新】路径英文化 + GitHub 首次备份 + 启动 Windows 迁移
+>
+> * **路径与文件名统一改为英文**（正文仍为中文）：`实验数据/` → `experiment_data/`、
+>   `接收结果/` → `received/`、`文本消息.txt` → `text_messages.txt`、
+>   `测试文件-*.bin` → `test_file_*.bin`、`测试图片-*.png` → `test_image_*.png`、
+>   `接口.md` → `team_interfaces_original.md`、`使用说明.pdf` → `usage_notes.pdf`。
+>   共改名 1 个目录 + 12 个文件，并同步替换了 20 个文件里的 69 处路径引用；
+>   目的是**为迁移到 Windows 做准备**（Windows 默认 ANSI 是 GBK，
+>   源码里的 UTF-8 中文路径容易打不开文件）。
+>   改动后已重新干净部署并全量回归：**16 个测试全通过、6 步验证全 PASS**；
+>   虚拟机内 `find` 确认**零非 ASCII 路径名**。
+> * **GitHub 首次备份**：仓库 <https://github.com/Urruna/secureTransfer>（Private）。
+>   由于当时 Windows 主机尚未安装 git，先在 Linux 虚拟机内建立仓库
+>   （`git init` + 首次提交 + 标签 `v1.0-linux-verified`），再把 `.git` 取回主机，
+>   并用"主机工作区 → 虚拟机原仓库 `git status`"的方式验证了**内容与提交完全一致**。
+>   入选 132 个文件 / 4.92 MB；排除 `build/`、`reference/.../.vs`（579 MB）、
+>   `Debug/`、`x64/`、`configs/keys.conf`（含 K_master）、`experiment_data/received/`、
+>   `access_log.txt` 与各类二进制，共 585 MB 未入库。
+>   随后主机安装了 **Git for Windows 2.47.1（D:\AppGallery\Git）**，
+>   把提交署名改为 Urruna <1956274291@qq.com>，分支改名为 `main`，
+>   推送到 GitHub 并打好标签。
+> * **下一步**：按迁移路线 A 推进（M1 先在 Windows 编译无平台依赖的库与测试，
+>   M2 移植网络层到 Winsock2，M3 处理 UTF-8→UTF-16 路径，M5 编译 Qt 界面）。
+>   方案全文见 §22。
 
 ---
 
@@ -1946,3 +1973,90 @@ GUI 线程  ──(加锁队列下发命令)──▶  SessionWorker 线程
    界面只通过队列与信号交互，既保证不卡顿，也避免多线程触碰非线程安全对象。
 4. **截图要会自证**：`vmrun captureScreen` 抓到的是虚拟机控制台（桌面黑屏时只有 2 KB 单色图），
    改用 X 会话里的 `xwd` 抓窗口并统计颜色数（>1000）才能确认"真的截到了界面"。
+
+---
+
+# 22. 第七轮：路径英文化、GitHub 备份与 Windows 迁移方案（2026-10-01）
+
+## 22.1 为什么要把中文路径改成英文
+
+迁移到 Windows 时有一个**不会在编译期报错、只在运行时报错**的坑：
+Windows 默认 ANSI 代码页是 GBK，而我们的源码是 UTF-8；
+`std::ifstream("实验数据/测试文件-1MB.bin")` 会把 UTF-8 字节按 GBK 解释 → **找不到文件**。
+影响范围包括密钥文件、实验数据、审计日志、文件/图像传输的落盘路径。
+
+因此在迁移前先把**所有文件名与路径改为英文**（正文仍保留中文），
+这样即使暂时不做 UTF-8→UTF-16 封装，Windows 上也能正常打开这些文件。
+
+改名清单与验证结果见第七次更新横幅；要点是：
+
+* 改名 1 个目录 + 12 个文件，同步替换 20 个文件里的 69 处路径引用；
+* 干净重部署后 **16/16 测试通过、6 步验证全 PASS**；
+* 虚拟机内 `find` 确认**零非 ASCII 路径名**。
+
+## 22.2 GitHub 备份（已完成）
+
+| 项目 | 内容 |
+| --- | --- |
+| 仓库 | <https://github.com/Urruna/secureTransfer>（**Private**） |
+| 分支 / 标签 | `main` / `v1.0-linux-verified` |
+| 首次提交 | `0295729`（作者 Urruna <1956274291@qq.com>） |
+| 入库规模 | 132 个文件 / 4.92 MB |
+| 未入库 | `build/`、`.vs/`（579 MB）、`Debug/`、`x64/`、`configs/keys.conf`、`experiment_data/received/`、`access_log.txt`、二进制文件 —— 合计 585 MB |
+
+**为什么先在 Linux 虚拟机里建仓**：当时 Windows 主机还没有 git。
+做法是：虚拟机内 `git init` + 提交 + 打标签 → 把 `.git` 目录取回主机 →
+再由主机侧的 **Git for Windows 2.47.1（安装于 `D:\AppGallery\Git`）** 完成署名修改、
+分支改名与推送。一致性是通过"把主机工作区打包送回虚拟机、在原仓库里跑 `git status`"
+验证的（结果为空 = 完全一致）。
+
+遇到的一个环境问题值得记录：沙箱身份创建的文件，其**所有者**是
+`CodexSandboxOffline`，而 git 以真实账号运行时会报
+`detected dubious ownership`。因为 ACL 已经给了真实账号读写权限，
+**不需要改所有权**，只需在用户级 git 配置里加一条
+`safe.directory` 例外（已添加，另加了 OS 根目录）。
+
+## 22.3 Windows 迁移方案（路线 A）要点
+
+**平台相关代码集中在 5 个文件**（其余是纯 C++17，不用改）：
+
+| 文件 | 依赖 | 迁移做法 |
+| --- | --- | --- |
+| `src/network/network.cpp` | POSIX socket 全套 | `#ifdef _WIN32` 双路径：`winsock2.h/ws2tcpip.h`、`WSAStartup/WSACleanup`、`closesocket`、`WSAGetLastError` 错误码映射、超时从 `timeval` 改 `DWORD` 毫秒、`kInvalidSocket` 改 `INVALID_SOCKET`（约 200–250 行） |
+| `tests/raw_client.h` | 同上 | 同一套 `#ifdef`（约 30 行） |
+| `src/common/random.cpp` | `/dev/urandom` | 改用 `BCryptGenRandom`（随机数允许用系统 API，密码算法仍须自写） |
+| `include/common/path_utils.h` | `mkdir()` | 改用 `_mkdir()`（`<direct.h>`） |
+| `src/security/keystore.cpp` | `stat()` 权限位 | Windows 无 POSIX 权限位 → 跳过该检查 + 文档提示用 ACL |
+
+另外两项通用工作：
+
+1. **UTF-8 → UTF-16 路径封装**（约 10 处文件打开点）：虽然路径已英文化，
+   但为了稳健（用户可能用中文目录名），仍建议统一走
+   `std::filesystem::u8path` 或 `_wfopen`；
+2. **控制台编码**：每个程序启动时 `SetConsoleOutputCP(CP_UTF8)`，否则中文日志乱码。
+
+Windows 侧需要准备：**MinGW-w64（MSYS2）或 MSVC**、CMake、Qt5（MSYS2 包或 Qt 官方安装器）、
+OpenSSL（仅性能对比工具需要）、Wireshark（替代 tcpdump）、Python（已装）。
+已安装：**Git for Windows 2.47.1 → `D:\AppGallery\Git`**。
+
+实施顺序（每步都有验收标准）：
+
+| 阶段 | 内容 | 验收 |
+| --- | --- | --- |
+| M1 | 先编译**无平台依赖**的库与测试（aes/cmac/packet/transcript/replay_guard/transfer_meta） | 标准向量（FIPS-197 / SP 800-38A / RFC 4493）在 Windows 通过 |
+| M2 | 移植网络层 | `test_frame`/`test_network`/`test_tcp_roundtrip` 通过 |
+| M3 | 路径与文件 I/O、`%TEMP%`、权限检查降级 | `test_file_transfer`、`test_transfer_meta` 通过 |
+| M4 | 控制台中文输出 | `alice`/`bob` 中文不乱码 |
+| M5 | Qt 界面 | `st_ui` 在 Windows 桌面完成一次会话 |
+| M6 | 全量回归 + 重新采集证据 | 16 个测试全绿；要求 5 的性能表、要求 6 的双机测试、要求 9 的逐字节一致 |
+| M7 | 文档同步 | Linux / Windows 两套实测数据分别标注 |
+
+## 22.4 本轮的经验
+
+1. **跨平台迁移的第一道坎往往不是代码，而是路径与编码**：
+   中文文件名在 GBK 环境下"编译能过、运行打不开"，先英文化是最省事的解法。
+2. **备份要在改动之前做**：这一轮先改名、再建仓、再推送，顺序刚好；
+   如果先改代码再备份，一旦迁移出错就没有可回退的干净点。
+3. **沙箱/容器环境会带来"文件所有者"问题**：git 的 `safe.directory` 检查、
+   以及某些工具的所有权校验，都可能在"文件能被读写但仍被拒绝"的情况下出现——
+   先分清楚是**权限**问题还是**所有权校验**问题，再决定改 ACL 还是加例外。
