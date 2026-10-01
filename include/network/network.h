@@ -94,6 +94,26 @@ public:
     bool setReceiveTimeoutMs(int ms);     ///< 设置 recv 超时，0 表示永不超时
     bool setSendTimeoutMs(int ms);        ///< 设置 send 超时，0 表示永不超时
 
+    // ---- 非阻塞探测（第三部分的图形界面需要）----
+    // 界面工作线程不能靠"把接收超时当成没有数据"来轮询：那样既会把每次超时
+    // 打成一行错误日志，又会让消息延迟受轮询间隔限制。这里提供一个
+    // "等一小会儿，看有没有数据可读" 的原语：
+    //   * 只要对端发来数据，select() 会立即返回 → 上层马上调用 receiveFrame()；
+    //   * 期间没有数据则返回 kTimeout，这不是错误，不会写 lastError()。
+
+    /// waitReadable() 的结果。
+    enum class WaitResult {
+        kReadable,  ///< 有数据可读（注意：对端关闭连接时 select() 也会报可读）
+        kTimeout,   ///< 等待时间内没有数据到达
+        kError      ///< socket 出错，详情见 lastError()
+    };
+
+    /// 最多等待 timeoutMs 毫秒，直到连接上有数据可读。
+    /// timeoutMs == 0 表示立即返回（纯非阻塞探测）。
+    /// 本方法不会打印错误日志；"暂时没有数据"时也不会修改 lastResult()/lastError()，
+    /// 因此可以在循环里反复调用。
+    WaitResult waitReadable(int timeoutMs);
+
     Result lastResult() const;            ///< 最近一次操作的结果
     const std::string& lastError() const; ///< 最近一次失败的详细描述
 

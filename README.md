@@ -250,6 +250,8 @@ AES-128 / CMAC   ──────────▶    CmacEngine → MacEngine  
 
 * 第三部分只需要 `SecureSession`：`connectToServer()` / `acceptOneClient()` /
   `sendMessage(type, bytes)` / `receiveMessage(type, bytes)` / `stats()`；
+  （界面这类需要"边等数据边干别的"的调用方用非阻塞版
+  `tryReceiveMessage(type, bytes, waitMs)`，见 `docs/interfaces.md`）
 * 第一部分成果通过 `CmacEngine`（把 `CMAC` 适配成 `MacEngine`）接入，
   算法实现文件 `aes.cpp` / `cmac.cpp` 保持原样，未做任何修改；
 * 若第一部分将来替换算法实现，只需要替换 `MacEngine` / `CryptoProvider` 的实现，

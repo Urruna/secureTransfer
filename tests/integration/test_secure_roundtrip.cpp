@@ -12,6 +12,7 @@
 #include <future>
 #include <thread>
 #include <vector>
+#include <chrono>
 
 #include "crypto/aes_crypto_provider.h"
 #include "security/session.h"
@@ -191,6 +192,74 @@ ST_TEST_CASE("secure_roundtrip: 同一会话内 Nonce 不重复") {
     ST_CHECK(client.receiveMessage(type, reply));
     client.close();
     serverThread.join();
+    ST_CHECK(server.error.empty());
+}
+
+ST_TEST_CASE("secure_roundtrip: tryReceiveMessage 区分「没有数据」「收到消息」「会话结束」") {
+    const Key128 key = testutil::testMasterKey(0x5A);
+
+    std::promise<std::uint16_t> portPromise;
+    auto portFuture = portPromise.get_future();
+    SessionConfig serverConfig = testutil::makeServerConfig(0, key);
+    serverConfig.onListening = [&portPromise](std::uint16_t port) {
+        portPromise.set_value(port);
+    };
+
+    ServerResult server;
+    testutil::ThreadGuard serverThread(std::thread(runServer, serverConfig, &server));
+    const std::uint16_t port = portFuture.get();
+
+    AesCryptoProvider crypto(nullptr);
+    SecureSession client(crypto, testutil::makeClientConfig(port, key));
+    ST_CHECK(client.connectToServer());
+
+    MessageType type = MessageType::kError;
+    Bytes body;
+
+    // ① 对端没有数据：返回 kNothing，等待时间到就返回，而不是把"超时"当成错误。
+    const auto idleStart = std::chrono::steady_clock::now();
+    ST_CHECK(client.tryReceiveMessage(type, body, 60) ==
+             SecureSession::ReceiveStatus::kNothing);
+    const auto idleMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - idleStart)
+                            .count();
+    ST_CHECK(idleMs >= 40);        // 确实等待过（不是忙等空转）
+    ST_CHECK(client.lastError().empty());   // "没有数据"不是错误，不写 lastError
+    ST_CHECK(client.isEstablished());       // 会话仍然可用
+
+    // ② 对端发来数据：select() 一到数据就返回，远早于给定的等待上限。
+    ST_CHECK(client.sendMessage(MessageType::kData, stringToBytes("ping")));
+    const auto replyStart = std::chrono::steady_clock::now();
+    ST_CHECK(client.tryReceiveMessage(type, body, 3000) ==
+             SecureSession::ReceiveStatus::kMessage);
+    const auto replyMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - replyStart)
+                             .count();
+    ST_CHECK(replyMs < 1000);  // 数据一到就醒（不是等满 3000 ms 的超时轮询）
+    ST_CHECK(type == MessageType::kData);
+    ST_CHECK_EQ(bytesToString(body), std::string("ACK 1"));
+
+    // ③ 对端关闭连接：返回 kClosed（会话结束），而不是 continue 死循环。
+    ST_CHECK(client.sendMessage(MessageType::kClose, Bytes{}));
+    ST_CHECK(client.tryReceiveMessage(type, body, 3000) ==
+             SecureSession::ReceiveStatus::kMessage);
+    ST_CHECK_EQ(bytesToString(body), std::string("BYE"));
+
+    bool closed = false;
+    for (int i = 0; i < 100 && !closed; ++i) {
+        const SecureSession::ReceiveStatus status = client.tryReceiveMessage(type, body, 100);
+        if (status == SecureSession::ReceiveStatus::kClosed) {
+            closed = true;
+        } else {
+            ST_CHECK(status == SecureSession::ReceiveStatus::kNothing);
+        }
+    }
+    ST_CHECK(closed);
+    ST_CHECK(!client.lastError().empty());  // 会话结束一定有原因
+
+    client.close();
+    serverThread.join();
+    ST_CHECK(server.finished);
     ST_CHECK(server.error.empty());
 }
 

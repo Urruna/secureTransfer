@@ -220,6 +220,43 @@ ST_TEST_CASE("Network: Linux 上同一端口重复 listen 会失败") {
 #endif
 }
 
+ST_TEST_CASE("Network: waitReadable 用于非阻塞探测（无数据=超时，有数据=立即可读）") {
+    Network server;
+    ST_CHECK(server.listen(0));
+    const uint16_t port = server.boundPort();
+
+    Network client;
+    ST_CHECK(client.connect("127.0.0.1", port));
+    ST_CHECK(server.accept());
+
+    // ① 还没有数据：返回 TIMEOUT，且不被当作错误（lastResult 保持 OK、没有错误文本）
+    ST_CHECK(server.waitReadable(50) == Network::WaitResult::kTimeout);
+    ST_CHECK(server.lastResult() == Network::Result::OK);
+    ST_CHECK(server.lastError().empty());
+
+    // ② 对端发来数据：探测立即返回可读，随后可以正常读出完整 Frame
+    ST_CHECK(client.sendFrame(Frame::fromString("ping")));
+    ST_CHECK(server.waitReadable(2000) == Network::WaitResult::kReadable);
+    Frame frame;
+    ST_CHECK(server.receiveFrame(frame));
+    ST_CHECK_EQ(frame.toString(), std::string("ping"));
+
+    // ③ 读完之后又变回"没有数据"
+    ST_CHECK(server.waitReadable(50) == Network::WaitResult::kTimeout);
+
+    // ④ 对端关闭连接：探测仍然报"可读"（EOF），此时 receiveFrame 会得到 PEER_CLOSED
+    client.close();
+    ST_CHECK(server.waitReadable(2000) == Network::WaitResult::kReadable);
+    Frame closedFrame;
+    ST_CHECK(!server.receiveFrame(closedFrame));
+    ST_CHECK(server.lastResult() == Network::Result::PEER_CLOSED);
+
+    // ⑤ 没有连接时探测要明确报错，而不是假装"暂时没数据"
+    Network fresh;
+    ST_CHECK(fresh.waitReadable(0) == Network::WaitResult::kError);
+    ST_CHECK(!fresh.lastError().empty());
+}
+
 int main() {
     return ::testutil::runAll("network");
 }

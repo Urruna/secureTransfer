@@ -1906,11 +1906,12 @@ PNG 由标准库 `zlib` 手工构造并逐块校验过 PNG 的 CRC 与解压长�
 ```text
 GUI 线程  ──(加锁队列下发命令)──▶  SessionWorker 线程
    ▲                                   │ 独占 SecureSession
-   └──────(Qt 信号：日志/状态/进度)─────┘ 握手 → 发送 → 250 ms 超时轮询接收
+   └──────(Qt 信号：日志/状态/进度)─────┘ 握手 → 发送 → 接收（见 §24：改为 tryReceiveMessage）
 ```
 
 `SecureSession` 不是线程安全的，所以规定**只有工作线程碰它**；
-界面永远不卡（对端消息最多延迟 250 ms 显示）。
+界面永远不卡（当时的实现是对端消息最多延迟 250 ms 显示；
+2026-10-01 已改为 `tryReceiveMessage()`，延迟与日志噪声问题都已解决，见 §24）。
 
 **（2）界面不含任何密码学逻辑**
 
@@ -1944,8 +1945,8 @@ GUI 线程  ──(加锁队列下发命令)──▶  SessionWorker 线程
 
 ## 21.6 已知限制
 
-1. 接收用 250 ms 超时轮询（`SecureSession` 目前只有阻塞接收接口）；
-2. "接收失败是否为超时"依赖错误文本判断（接口未暴露 `Network::Result`）——已在代码注释标注；
+1. ~~接收用 250 ms 超时轮询（`SecureSession` 目前只有阻塞接收接口）~~ —— 已于 §24 解决；
+2. ~~"接收失败是否为超时"依赖错误文本判断（接口未暴露 `Network::Result`）~~ —— 已于 §24 解决；
 3. 一次只服务一个会话；文件发送没有队列 / 断点续传；
 4. 攻击演示按钮会导致对端拒绝并终止会话（这正是演示目的），演示后需重新连接；
 5. 界面需要图形会话（`DISPLAY`），因此在 `verify_in_vm.sh` 里**不跑**，
@@ -2385,14 +2386,121 @@ export QT_QPA_PLATFORM=offscreen
 获取方式：脚本启动两个 `st_ui` 实例跑完一次会话后用 `PrintWindow` 抓取客户端窗口；
 复现命令见 `docs/screenshots/README.md`。
 
-**本轮发现但尚未修改的问题（等你决定）**：界面在**空闲**时按 250 ms 轮询接收，
+**本轮发现的问题（已在本轮后续修复，见 §24）**：界面在**空闲**时按 250 ms 轮询接收，
 每次超时都由 `Network` / `Session` 以 **ERROR** 级别打印一行
 `recv() 超时，已接收 0/4 字节`（实测几秒钟就刷出 200+ 行）。
 这是**迁移前就存在**的行为（`docs/ui.md` §8 已记录"250 ms 轮询"这一设计妥协），
-不是 Windows 引入的。可选的改法（都属于"锦上添花"，不影响功能与正确性）：
+不是 Windows 引入的。当时的三个备选改法是：
 
 1. 在 `Network::receiveFrame()` / `SecureSession::receiveMessage()` 里把**超时**降为 DEBUG 级
    （真正的错误仍用 ERROR）；
 2. 或给 `SecureSession` 增加一个"非阻塞尝试接收"接口，
    让界面不必靠超时来轮询（同时消除最多 250 ms 的消息延迟）；
 3. 或仅在界面层静默（不改动网络/会话层）。
+
+**用户选择第 2 条**，实现与实测结果见 §24。
+
+---
+
+# 24. 第九轮：给 SecureSession 增加"非阻塞尝试接收"，替换界面的超时轮询（2026-10-01）
+
+## 24.1 问题
+
+界面工作线程原先这样收数据：
+
+```cpp
+sessionConfig.ioTimeoutMs = 250;            // 把"接收超时"当成"没有数据"
+...
+if (!session.receiveMessage(type, body)) {
+    if (isTimeoutError(session.lastError())) continue;   // 按错误文本猜是不是超时
+    ...终止会话...
+}
+```
+
+两个后果（都是这次实测量化出来的）：
+
+1. **日志噪声**：每次超时都由 `Network` / `Session` 打一行 ERROR
+   （`recv() 超时，已接收 0/4 字节`）。空闲几秒钟，客户端日志就涨到 **352 行**；
+2. **消息延迟**：接收间隔 = 轮询间隔，对端消息最多晚 **250 ms** 才显示。
+
+另外第 2 点还有个隐藏代价：`ioTimeoutMs` 同时被当成"数据阶段的读超时"，
+为了界面流畅被迫设成 250 ms，一旦对端发包中途卡住，读操作会在 250 ms 就失败。
+
+## 24.2 设计：分两层解决，不改协议语义
+
+| 层 | 新增接口 | 作用 |
+| --- | --- | --- |
+| `Network` | `enum class WaitResult { kReadable, kTimeout, kError }`<br>`WaitResult waitReadable(int timeoutMs)` | 用 `select()` 探测"有没有数据可读"。**没有数据不算错误**：不打印日志、不动 `lastResult()/lastError()`；`timeoutMs == 0` 就是纯非阻塞探测 |
+| `SecureSession` | `enum class ReceiveStatus { kMessage, kNothing, kClosed }`<br>`ReceiveStatus tryReceiveMessage(MessageType&, Bytes&, int waitMs = 0)` | 先 `waitReadable(waitMs)`：可读才走原来的 `receiveMessage()`（完整性、防重放、解密**只有这一处实现**）；没数据返回 `kNothing`，会话结束/出错返回 `kClosed` |
+
+界面工作线程随之简化：
+
+```cpp
+constexpr int kIdleWaitMs = 100;     // 没有数据时，最多隔多久回头看一眼命令队列
+constexpr int kIoTimeoutMs = 5000;   // 已确认可读之后，读满一个完整包的兜底超时
+...
+const auto status = session.tryReceiveMessage(type, body, kIdleWaitMs);
+if (status == SecureSession::ReceiveStatus::kNothing) { continue; }
+if (status == SecureSession::ReceiveStatus::kClosed)  { ...终止...; break; }
+```
+
+要点：
+
+* **消息延迟不再由轮询间隔决定**——`select()` 在对端发出数据的那一刻就被唤醒；
+  那个 100 ms 只影响"点击发送到命令被执行"的最坏延迟（原来这个值是 250 ms）；
+* `ioTimeoutMs` 现在可以恢复成一个**正常的读超时（5 s）**，用于"包读了一半对端卡死"的兜底；
+* 删除界面里那段"按错误文本猜超时"的 `isTimeoutError()` hack
+  （`docs/ui.md` §8 里的已知妥协随之作废）；
+* **协议、密码学、状态机、包格式一律未改**：`receiveMessage()` 保留原样，
+  新接口只是它前面加了一道"有没有数据"的探测。
+
+## 24.3 代码改动（4 个文件 + 2 个测试）
+
+| 文件 | 改动 |
+| --- | --- |
+| `include/network/network.h` / `src/network/network.cpp` | 新增 `WaitResult` 与 `waitReadable()`（`select()`；Windows 下第一个参数填 0；POSIX 下 `+1`；`EINTR` 重试） |
+| `include/security/session.h` / `src/security/session.cpp` | 新增 `ReceiveStatus` 与 `tryReceiveMessage()` |
+| `apps/ui/session_worker.cpp` | 5.2 段改用 `tryReceiveMessage()`；删除 `isTimeoutError()`；`kPollTimeoutMs(250)` → `kIdleWaitMs(100)` + `kIoTimeoutMs(5000)` |
+| `tests/unit/test_network.cpp` | 新用例：无数据 → `kTimeout`（且 `lastResult()` 仍为 OK、无错误文本）；有数据 → `kReadable`；对端关闭 → 仍报可读但 `receiveFrame()` 得到 `PEER_CLOSED`；未连接 → `kError` |
+| `tests/integration/test_secure_roundtrip.cpp` | 新用例：`kNothing`（等待 60 ms 后返回、`lastError()` 为空、会话仍建立）→ `kMessage`（3000 ms 预算内 <1000 ms 返回，证明"数据一到就醒"）→ `kClosed`（对端关闭后 100 次探测内返回，且 `lastError()` 非空） |
+
+## 24.4 实测结果（2026-10-01）
+
+**Windows（MSYS2 MinGW-w64，g++ 16.2.0）**
+
+```text
+编译：0 error，0 warning
+ctest：100% tests passed out of 16
+test_network.exe            → ALL TESTS PASSED: 11/11（含新增 waitReadable 用例）
+test_secure_roundtrip.exe   → ALL TESTS PASSED:  3/3（含新增 tryReceiveMessage 用例）
+```
+
+**界面同一场景前后对比**（两个 `st_ui` 实例：握手 + 短消息 + 64 KB 文件 + WHOAMI，跑完后再空转 5 秒）
+
+| 指标 | 改前（250 ms 超时轮询） | 改后（`tryReceiveMessage`） |
+| --- | --- | --- |
+| 客户端日志行数 | 352 行 | **11 行** |
+| 其中 "超时" 行 | 300+ 行 | **0 行** |
+| 服务端日志行数 | 353 行 | **15 行** |
+| 其中 "超时" 行 | 300+ 行 | **0 行** |
+| 文件传输 | 65536 字节、CRC32 通过 | 65536 字节、CRC32 通过（不受影响） |
+| 访问控制 | ALLOW / DENY 正常 | ALLOW / DENY 正常（不受影响） |
+
+**Linux 回归（Ubuntu 20.04，g++ 9.4.0）**
+
+```text
+编译：0 error，0 warning
+ctest：100% tests passed, 0 tests failed out of 16
+Alice/Bob 演示：4 条测试消息全部成功
+文件/图像传输：4/4 逐字节一致
+```
+
+## 24.5 仍然保留的取舍
+
+1. 界面仍是"单线程 + 命令队列"结构：100 ms 的空闲等待意味着**命令执行最坏延迟 100 ms**
+   （体积上比原来的 250 ms 更好；如果要做成真正的"事件驱动"，
+   可以再加一个自管道/eventfd 唤醒 `select()`，但那属于额外复杂度，当前演示场景不需要）；
+2. `waitReadable()` 只探测**连接 socket**：它不处理"监听 socket 上有没有新连接"，
+   服务端仍然是 `acceptOneClient()` 一次性接受一个客户端（与命令行版一致）；
+3. 对端关闭时 `select()` 也一样报"可读"，这是 TCP 的语义；
+   调用方必须像界面那样把 `kClosed` 当作会话结束，而不是"有数据"。

@@ -31,6 +31,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -575,6 +576,52 @@ bool Network::setReceiveTimeoutMs(int timeoutMs) {
 
 bool Network::setSendTimeoutMs(int timeoutMs) {
     return applyTimeout(false, timeoutMs);
+}
+
+Network::WaitResult Network::waitReadable(int timeoutMs) {
+    if (timeoutMs < 0) {
+        (void)fail(Result::INVALID_ARGUMENT, "waitReadable() 参数非法：超时时间不能为负数");
+        return WaitResult::kError;
+    }
+    if (connectionSocket_ == kInvalidSocket) {
+        (void)fail(Result::NOT_CONNECTED,
+                   "waitReadable() 失败：尚未 connect() 或 accept()，没有可用连接");
+        return WaitResult::kError;
+    }
+
+    const SocketHandle handle = toHandle(connectionSocket_);
+
+    for (;;) {
+        fd_set readSet;
+        FD_ZERO(&readSet);
+        FD_SET(handle, &readSet);
+
+        timeval timeout;
+        timeout.tv_sec = timeoutMs / 1000;
+        timeout.tv_usec = static_cast<long>((timeoutMs % 1000) * 1000);
+
+#if defined(_WIN32)
+        // Windows 的 select() 忽略第一个参数
+        const int ready = ::select(0, &readSet, nullptr, nullptr, &timeout);
+#else
+        const int ready =
+            ::select(static_cast<int>(handle) + 1, &readSet, nullptr, nullptr, &timeout);
+#endif
+        if (ready > 0) {
+            return WaitResult::kReadable;
+        }
+        if (ready == 0) {
+            // 没有数据：这不是错误，故意不设置 lastResult_ / lastError_。
+            return WaitResult::kTimeout;
+        }
+
+        const int code = lastSocketError();
+        if (isInterrupted(code)) {
+            continue;  // 被信号打断（POSIX 上 timeout 会被改写，重试即可）
+        }
+        (void)fail(Result::SOCKET_FAILURE, std::string("select() 失败: ") + describeError(code));
+        return WaitResult::kError;
+    }
 }
 
 void Network::close() {

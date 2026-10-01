@@ -69,6 +69,7 @@
 | 防重放 | 严格递增 + 两阶段提交 | 两阶段避免"伪造大序号包把合法包挤掉"的拒绝服务 |
 | 线程模型 | 单线程同步、单会话 | 与第一阶段 `Network` 的非线程安全约定一致，降低出错面 |
 | 对外接口 | `SecureSession` 门面 | 第三部分不需要了解 Frame / Packet / 握手细节 |
+| 非阻塞接收 | `Network::waitReadable()` + `SecureSession::tryReceiveMessage()` | 图形界面需要"边等数据边处理别的事"：`select()` 等可读，数据一到立刻返回，且"暂时没有数据"不被当作错误（详见 `Part2_transfer.md` §24） |
 
 ## 4. 扩展点
 

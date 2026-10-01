@@ -116,6 +116,25 @@ public:
     /// 若对端发送 kClose，则返回 true 且 type == kClose（plaintext 为空）。
     bool receiveMessage(MessageType& type, Bytes& plaintext);
 
+    /// tryReceiveMessage() 的结果：把"暂时没有数据"与"会话结束/出错"区分开。
+    enum class ReceiveStatus {
+        kMessage,  ///< 收到一条完整消息（type / plaintext 有效）
+        kNothing,  ///< 在等待时间内没有数据到达（不是错误，lastError() 保持不变）
+        kClosed    ///< 会话不可继续（对端关闭 / 协议错误 / socket 错误），原因见 lastError()
+    };
+
+    /// 非阻塞（最多等待 waitMs 毫秒）地尝试接收一条业务消息。
+    ///
+    /// 与 receiveMessage() 的区别：
+    ///   1. "暂时没有数据"不再是失败，也不会打印错误日志（返回 kNothing）；
+    ///   2. 内部用 select() 等待可读，数据一到就立刻返回，
+    ///      因此调用方的消息延迟不受"sleep + 超时"式轮询的间隔限制。
+    ///
+    /// 典型用法（图形界面工作线程）：
+    ///     auto status = session.tryReceiveMessage(type, body, 100);
+    ///     if (status == kNothing) { /* 处理本线程的其它任务，然后重试 */ }
+    ReceiveStatus tryReceiveMessage(MessageType& type, Bytes& plaintext, int waitMs = 0);
+
     /// 主动结束会话：发送 kClose（尽力而为）并关闭连接。
     void close();
 

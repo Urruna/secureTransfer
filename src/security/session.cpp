@@ -615,6 +615,31 @@ bool SecureSession::receiveMessage(MessageType& type, Bytes& plaintext) {
     return true;
 }
 
+SecureSession::ReceiveStatus SecureSession::tryReceiveMessage(MessageType& type, Bytes& plaintext,
+                                                             int waitMs) {
+    if (state_ != SessionState::kEstablished) {
+        ++stats_.rejectedState;
+        (void)fail(std::string("会话尚未建立，不能接收业务数据（当前状态: ") +
+                   sessionStateToString(state_) + "）");
+        return ReceiveStatus::kClosed;
+    }
+
+    // 先探测"有没有数据可读"：数据一到就立刻返回，不再依赖接收超时。
+    switch (network_.waitReadable(waitMs)) {
+        case Network::WaitResult::kTimeout:
+            return ReceiveStatus::kNothing;  // 只是暂时没有数据，不是错误
+        case Network::WaitResult::kError:
+            (void)fail(std::string("等待对端数据失败: ") + network_.lastError());
+            return ReceiveStatus::kClosed;
+        case Network::WaitResult::kReadable:
+            break;
+    }
+
+    // 可读之后走与 receiveMessage() 完全相同的处理路径：
+    // 完整性校验、防重放、解密都只有这一处实现，不重复。
+    return receiveMessage(type, plaintext) ? ReceiveStatus::kMessage : ReceiveStatus::kClosed;
+}
+
 void SecureSession::close() {
     network_.close();
     if (state_ != SessionState::kFailed) {

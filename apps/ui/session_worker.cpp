@@ -64,19 +64,11 @@ QString describePlaintext(const Bytes& data) {
         .arg(QString::fromStdString(toHex(data.data(), std::min<std::size_t>(32, data.size()))));
 }
 
-/// 判断一次接收失败是否只是"超时"（没有数据到达，会话仍然可用）。
-///
-/// ⚠ 说明：`SecureSession` 目前没有暴露 `Network::Result`，所以只能按错误文本判断。
-///    这是界面层的一个已知妥协；如果以后给 SecureSession 增加
-///    `tryReceiveMessage()`（返回 NO_DATA / ERROR 两种结果），这段判断就可以删掉。
-bool isTimeoutError(const std::string& message) {
-    return message.find("超时") != std::string::npos ||
-           message.find("timeout") != std::string::npos ||
-           message.find("TIMEOUT") != std::string::npos ||
-           message.find("ETIMEDOUT") != std::string::npos;
-}
-
-constexpr int kPollTimeoutMs = 250;   ///< 工作线程轮询间隔：兼顾界面响应与 CPU 占用
+/// 空闲等待：既用来等对端数据，也用来重新检查命令队列与停止标志。
+/// 注意它**不再决定消息延迟**——`tryReceiveMessage()` 内部用 select() 等可读，
+/// 对端一发数据就立刻返回，这里只是"没有数据时最多等多久再看一眼命令队列"。
+constexpr int kIdleWaitMs = 100;
+constexpr int kIoTimeoutMs = 5000;    ///< 已确认可读之后，读满一个完整包的兜底超时
 constexpr int kHandshakeTimeoutMs = 8000;
 
 }  // namespace
@@ -193,7 +185,7 @@ void SessionWorker::run(UiConfig config) {
     sessionConfig.masterKey = keys.masterKey;
     sessionConfig.hasMasterKey = true;
     sessionConfig.handshakeTimeoutMs = kHandshakeTimeoutMs;
-    sessionConfig.ioTimeoutMs = kPollTimeoutMs;   // 轮询式接收，保证界面可交互
+    sessionConfig.ioTimeoutMs = kIoTimeoutMs;     // 只在"包读了一半对端卡住"时兜底
     sessionConfig.logHandshake = true;            // 握手每一步都写日志（界面上能看到）
 
     AesCryptoProvider crypto(nullptr);            // 真实 AES-CTR + 第一部分 CMAC
@@ -346,15 +338,19 @@ void SessionWorker::run(UiConfig config) {
             break;
         }
 
-        // 5.2 再尝试接收（短超时轮询）
+        // 5.2 再尝试接收：等到有数据就立刻返回，没有数据则先回去处理命令队列。
+        //     与旧实现的区别：不再把"接收超时"当成失败，也就不会再刷错误日志；
+        //     对端消息的显示延迟不再受空闲等待时间限制。
         MessageType type = MessageType::kError;
         Bytes body;
-        if (!session.receiveMessage(type, body)) {
-            const std::string lastError = session.lastError();
-            if (isTimeoutError(lastError)) {
-                continue;  // 只是没有数据，继续轮询
-            }
-            emit sessionStopped("接收失败（会话终止）：" + QString::fromStdString(lastError));
+        const SecureSession::ReceiveStatus status =
+            session.tryReceiveMessage(type, body, kIdleWaitMs);
+        if (status == SecureSession::ReceiveStatus::kNothing) {
+            continue;  // 暂时没有数据：回到循环顶部处理命令/停止标志
+        }
+        if (status == SecureSession::ReceiveStatus::kClosed) {
+            emit sessionStopped("接收失败（会话终止）：" +
+                                QString::fromStdString(session.lastError()));
             break;
         }
 

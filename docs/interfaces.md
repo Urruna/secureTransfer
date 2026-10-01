@@ -26,6 +26,10 @@ bool acceptOneClient();     // 服务端：listen + accept + 完整握手
 bool sendMessage(MessageType type, const Bytes& plaintext);
 bool receiveMessage(MessageType& type, Bytes& plaintext);
 
+// 业务数据（非阻塞版，图形界面等工作线程用）
+enum class ReceiveStatus { kMessage, kNothing, kClosed };
+ReceiveStatus tryReceiveMessage(MessageType& type, Bytes& plaintext, int waitMs = 0);
+
 void close();
 
 // 诊断
@@ -48,6 +52,7 @@ const PacketTrace& lastReceivedTrace() const;
 | `acceptOneClient()` | 同上 | 端口被占用、对端认证失败 |
 | `sendMessage()` | 消息已加密 + MAC 后写入 socket | 会话未建立、消息类型不允许、Body 超过 1048519 字节、序号耗尽 |
 | `receiveMessage()` | 返回 true 且 `plaintext` 为解密结果（`type == kClose` 时为空） | 格式非法、SessionId/方向不符、重放、MAC 校验失败、对端关闭、超时 |
+| `tryReceiveMessage(..., waitMs)` | 返回 `kMessage`（同 `receiveMessage()` 成功）；`kNothing` 表示在 `waitMs` 内没有数据（**不是错误**、不写 `lastError()`）；`kClosed` 表示会话不可继续 | 同 `receiveMessage()`（但"暂时没有数据"不算失败） |
 | `close()` | 关闭 socket，可重复调用 | — |
 
 `SessionConfig` 字段：
