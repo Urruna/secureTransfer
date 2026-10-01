@@ -21,6 +21,8 @@ CMakeLists.txt text eol=lf
 
 # 脚本在 Windows 上按 CRLF 更友好（但仍以 LF 入库，由 git 在检出时转换）
 *.ps1    text eol=crlf
+*.bat    text eol=crlf
+*.py     text eol=lf
 
 # 二进制文件：不做任何换行转换
 *.png    binary
@@ -30,3 +32,4 @@ CMakeLists.txt text eol=lf
 *.bmp    binary
 *.bin    binary
 *.pdf    binary
+*.pcapng binary
