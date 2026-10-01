@@ -1,0 +1,9 @@
+SecureTransfer 实验数据 - 文本消息
+
+测试1（短文本）：Hello Bob!
+测试2（普通英文）：A secure message between Alice and Bob.
+测试3（长文本+特殊字符）：Transfer #1024: Alice->Bob, amount=500.00 USD; status=OK! (check: 9f8e7d6c)
+测试4（中文 UTF-8）：你好，Bob，这是一次安全通信测试。
+
+说明：以上 4 条消息由 apps/alice 直接发送，用于课程要求 2 的"不少于 4 条测试数据消息"。
+本文件同时作为实验数据的可读备份。

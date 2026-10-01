@@ -1,0 +1,43 @@
+# 构建产物
+build/
+build-*/
+cmake-build-*/
+
+# 目标文件与可执行文件
+*.o
+*.obj
+*.a
+*.lib
+*.exe
+
+# 编辑器/IDE 临时文件
+.vscode/
+.idea/
+*.swp
+*~
+
+# 第一部分原件存档中的 Windows 构建产物
+# （reference/part1-aes-cmac/ 下的源码、VS 工程文件与说明 PDF 仍然纳入版本管理）
+reference/part1-aes-cmac/.vs/
+reference/part1-aes-cmac/Debug/
+reference/part1-aes-cmac/x64/
+
+# 本地密钥文件（含 K_master，绝不提交）
+configs/keys.conf
+
+# 运行产物：接收到的文件与审计日志（可由演示 / 测试重新生成；磁盘上主机与虚拟机仍各留一份，
+# 报告里引用的日志片段已经抄进 docs/access_control.md）
+experiment_data/received/
+experiment_data/access_log.txt
+
+# Windows 侧可能出现的构建产物与 IDE 文件
+out/
+build-msvc/
+.vs/
+*.user
+*.ilk
+*.pdb
+
+# 临时文件
+*.log.tmp
+~$*

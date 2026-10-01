@@ -1,0 +1,32 @@
+# ============================================================================
+#  Git 属性：统一换行符与二进制识别
+#
+#  背景：这个项目要在 Linux（虚拟机）与 Windows 两边开发，
+#        如果不设属性，同一份文件会因为 CRLF/LF 差异在每次跨平台提交时
+#        产生大量"整文件改动"，很难看懂 diff。
+# ============================================================================
+
+# 默认：按文本处理，仓库内统一用 LF
+* text=auto eol=lf
+
+# 源代码与文档：LF
+*.c      text eol=lf
+*.h      text eol=lf
+*.cpp    text eol=lf
+*.md     text eol=lf
+*.txt    text eol=lf
+*.sh     text eol=lf
+*.conf   text eol=lf
+CMakeLists.txt text eol=lf
+
+# 脚本在 Windows 上按 CRLF 更友好（但仍以 LF 入库，由 git 在检出时转换）
+*.ps1    text eol=crlf
+
+# 二进制文件：不做任何换行转换
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.bmp    binary
+*.bin    binary
+*.pdf    binary

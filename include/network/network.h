@@ -1,0 +1,123 @@
+// ============================================================================
+//  SecureTransfer - 第一阶段：基础 TCP 通信
+//  file: include/network/network.h
+//
+//  说明：Network 是网络通信模块对外的唯一接口。
+//        接口签名由项目组统一约定（connect / listen / accept /
+//        sendFrame / receiveFrame / close），请不要随意修改。
+//
+//  设计目标：
+//    1. 隐藏 POSIX Socket 细节，上层只面对 Frame；
+//    2. 保证 sendFrame()/receiveFrame() 每次处理的是一个完整 Frame，
+//       在内部正确处理 TCP 的粘包 / 拆包（partial send / partial recv）；
+//    3. 为后续 AES / CMAC / 安全协议预留扩展空间：
+//       安全层只需要重新构造 Frame 的 payload，不需要改动本类。
+// ============================================================================
+
+#ifndef SECURETRANSFER_NETWORK_NETWORK_H
+#define SECURETRANSFER_NETWORK_NETWORK_H
+
+#include <cstdint>
+#include <string>
+
+#include "network/frame.h"
+
+/// TCP 通信封装（同时支持客户端与服务端角色）。
+///
+/// 典型用法：
+///
+///   客户端 (Alice)                    服务端 (Bob)
+///   ----------------------------      ----------------------------
+///   Network net;                      Network net;
+///   net.connect("127.0.0.1", 9000);   net.listen(9000);
+///   net.sendFrame(frame);             net.accept();
+///   net.receiveFrame(frame);          net.receiveFrame(frame);
+///   net.close();                      net.close();
+class Network {
+public:
+    /// 最近一次操作的结果，便于调用者区分失败原因。
+    enum class Result {
+        OK,                ///< 成功
+        PEER_CLOSED,       ///< 对端关闭了连接（recv() == 0 或 send() 得到 RST/EPIPE）
+        TIMEOUT,           ///< 设置了收发超时并且已经超时
+        INVALID_FRAME,     ///< Frame 非法（length 与 payload 不一致、超过 1 MB 等）
+        NOT_CONNECTED,     ///< 尚未 connect()/accept() 就调用 sendFrame()/receiveFrame()
+        INVALID_ARGUMENT,  ///< 参数非法（host 为空、port 为 0 等）
+        SOCKET_FAILURE     ///< 其他 socket 系统调用错误，详情见 lastError()
+    };
+
+    Network();
+    ~Network();
+
+    // 一个 Network 对象持有一组 socket 资源，禁止拷贝与移动，避免重复析构。
+    Network(const Network&) = delete;
+    Network& operator=(const Network&) = delete;
+    Network(Network&&) = delete;
+    Network& operator=(Network&&) = delete;
+
+    /// 作为客户端连接 host:port（例如 "127.0.0.1", 9000）。
+    ///
+    /// @return 成功返回 true；失败返回 false，原因见 lastResult() / lastError()
+    bool connect(const std::string& host, uint16_t port);
+
+    /// 作为服务端在 port 上监听。
+    /// port == 0 表示由系统分配一个临时端口（测试时很方便，实际端口见 boundPort()）。
+    bool listen(uint16_t port);
+
+    /// 接受一个客户端连接（阻塞直到有客户端接入或出错）。
+    /// 必须先用 listen() 成功监听。若已有连接，会先关闭旧连接（演示阶段只服务单个客户端）。
+    bool accept();
+
+    /// 发送一个完整 Frame。
+    /// 内部会 serialize() 之后循环 writeAll()，从而正确处理 partial send。
+    bool sendFrame(const Frame& frame);
+
+    /// 接收一个完整 Frame。
+    /// 内部先 readExact() 读 4 字节 length，再 readExact() 读满 payload，
+    /// 从而正确处理 TCP 粘包 / 拆包。
+    bool receiveFrame(Frame& frame);
+
+    /// 关闭所有 socket。可以重复调用；不会修改 lastResult()/lastError()。
+    void close();
+
+    // ------------------------------------------------------------------
+    //  扩展 / 诊断接口
+    //  以下方法不属于项目组约定的核心接口，只是为 demo、测试以及后续
+    //  模块提供的便利方法，可以在不破坏核心接口的前提下调整。
+    // ------------------------------------------------------------------
+
+    bool isConnected() const;    ///< connect()/accept() 是否已成功
+    bool isListening() const;    ///< 是否处于监听状态
+    uint16_t boundPort() const;  ///< listen() 实际绑定的端口（port == 0 时有用）
+
+    bool setTcpNoDelay(bool on);          ///< 关闭 Nagle 算法，降低小消息延迟
+    bool setReceiveTimeoutMs(int ms);     ///< 设置 recv 超时，0 表示永不超时
+    bool setSendTimeoutMs(int ms);        ///< 设置 send 超时，0 表示永不超时
+
+    Result lastResult() const;            ///< 最近一次操作的结果
+    const std::string& lastError() const; ///< 最近一次失败的详细描述
+
+    /// Result 的可读描述，用于日志输出。
+    static const char* resultToString(Result result);
+
+private:
+    /// 无效 socket 句柄的统一表示：
+    /// POSIX 下无效的文件描述符就是 -1。
+    static constexpr std::intptr_t kInvalidSocket = -1;
+
+    bool writeAll(const uint8_t* data, std::size_t length);
+    bool readExact(uint8_t* buffer, std::size_t length);
+    bool applyTimeout(bool forReceive, int timeoutMs);
+
+    void resetError();
+    bool fail(Result result, const std::string& message);
+
+    std::intptr_t listenSocket_;      ///< 监听 socket（仅服务端使用）
+    std::intptr_t connectionSocket_;  ///< 已建立的连接 socket
+    uint16_t boundPort_;              ///< listen() 绑定的端口
+
+    Result lastResult_;    ///< 最近一次操作的结果
+    std::string lastError_; ///< 最近一次失败的原因
+};
+
+#endif  // SECURETRANSFER_NETWORK_NETWORK_H
