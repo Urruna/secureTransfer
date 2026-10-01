@@ -12,7 +12,7 @@
 | 环境 | 编译 | 测试 | 端到端 | 备注 |
 | --- | --- | --- | --- | --- |
 | Ubuntu 20.04 虚拟机（Ubuntu6.21，g++ 9.4.0） | 0 错误 0 警告 | `ctest` **16/16** | 4 条测试消息 + 4 个文件/图像逐字节一致 | 局域网双机 + 抓包证据；性能对比（OpenSSL 1.1.1） |
-| Windows 主机（MSYS2 MinGW-w64，g++ 16.2.0） | 0 错误 0 警告 | `ctest` **16/16** | 4 条测试消息 + 4 个文件/图像逐字节一致 | 跨系统双机（Windows Alice ↔ Ubuntu Bob，双向）；性能对比（OpenSSL 3.6.5）；**Qt 界面未编译（主机缺 Qt SDK）** |
+| Windows 主机（MSYS2 MinGW-w64，g++ 16.2.0） | 0 错误 0 警告 | `ctest` **16/16** | 4 条测试消息 + 4 个文件/图像逐字节一致 | 跨系统双机（Windows Alice ↔ Ubuntu Bob，双向）；性能对比（OpenSSL 3.6.5）；Qt 界面（Qt 5.15.19）已编译并跑通一次会话 |
 
 篡改 / 伪造 / 重放 / 窃听四项安全测试在两端全部通过；
 密码算法与 OpenSSL 完成 1 KB ~ 100 MB 的性能对比（含"禁用 AES-NI 的纯软件对比"）。
@@ -104,7 +104,7 @@ Alice 和 Bob 只能通过不安全的网络通信，Eve 可以窃听、篡改�
 | 访问控制（Role/Permission） | ✅ 已完成（`src/security/access_control.cpp`）   | 策略可配置、服务端权威判定、审计日志：`docs/access_control.md`              |
 | Qt/图形界面                 | ✅ Linux 已完成（`apps/ui/`，Qt 5.12 Widgets）   | 需要`qtbase5-dev`；截图见 `docs/screenshots/`，说明见 `docs/ui.md`    |
 | Windows 侧编译与测试 | ✅ 已完成（MSYS2 MinGW-w64） | 0 错误 0 警告，`ctest` 16/16；见 `Part2_transfer.md` §23.3 |
-| Windows 侧 Qt 界面 | ⛔ 未完成 | 主机只有 Qt Creator、没有 Qt SDK；方案与决策点见 `Part2_transfer.md` §23.8 |
+| Windows 侧 Qt 界面 | ✅ 已完成（MSYS2 Qt 5.15.19） | 0 错误 0 警告；截图 `docs/screenshots/windows_ui_client.png`；说明见 `docs/ui.md` §10 |
 | 跨系统双机（Windows ↔ Ubuntu） | ✅ 已完成（双向） | 两个方向各跑完整会话，接收文件 sha256 逐字节一致；见 `Part2_transfer.md` §23.6 |
 | 前向保密                    | 不支持                                             | 预共享密钥方案的固有限制（`K_master` 泄露则历史会话可解）                   |
 | 抗 DoS                      | 不设计                                             | 未认证的 HELLO 也会被处理                                                     |
@@ -218,8 +218,10 @@ ctest --test-dir build-win --output-on-failure
 * Windows 用 `build-win/`，Linux 用 `build/`，两者都在 `.gitignore` 里，互不干扰；
 * 控制台中文不会乱码（程序启动时自动把代码页切到 UTF-8）；
 * 需要 MSYS2 的 `mingw-w64-x86_64-gcc / cmake / ninja`；性能对比工具还需要 `mingw-w64-x86_64-openssl`；
-* Qt 界面（`st_ui`）在 Windows 上**尚未编译**：找不到 Qt5 时 CMake 会自动跳过该目标，
-  不影响 `alice` / `bob` 与全部测试（原因与可选方案见 `Part2_transfer.md` §23.8）。
+* Qt 界面（`st_ui`）需要 MSYS2 的 `mingw-w64-x86_64-qt5`（已安装，Qt 5.15.19）；
+  找不到 Qt5 时 CMake 会自动跳过该目标，不影响 `alice` / `bob` 与全部测试。
+  运行 `st_ui.exe` 前要把 `D:\AppGallery\dev-tools\msys64\mingw64\bin` 加进 `PATH`
+  （否则会因缺少 `Qt5Core.dll` 等报 `0xC0000135`）。
 
 ## 5. 关键设计决策（写报告时可以直接引用）
 

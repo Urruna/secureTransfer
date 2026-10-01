@@ -2103,7 +2103,9 @@ M2 时需要把它提升到 3.16（Linux 侧的 CMake 3.16 也满足）。
 > 控制台编码（M4）、全量回归（M6），并在**同一台 Windows 主机**上跑通了
 > 「Windows Alice ↔ Ubuntu Bob」的跨系统双机通信与性能对比（M6 的证据补齐）。
 >
-> **M5（Qt 界面）未完成**，原因见 §23.8：主机上只有 Qt Creator，没有 Qt SDK。
+> **M5（Qt 界面）已在用户决策后完成**：按方案 A 在 MSYS2 里安装
+> `mingw-w64-x86_64-qt5`（Qt 5.15.19），`st_ui` 在 Windows 上编译通过
+> （0 错误 0 警告），并完成一次自动化会话 + 界面截图存档（见 §23.10）。
 
 ## 23.1 里程碑对照
 
@@ -2113,7 +2115,7 @@ M2 时需要把它提升到 3.16（Linux 侧的 CMake 3.16 也满足）。
 | M2 | 网络层移植（winsock2 + WSA 错误码 + 超时/关闭语义） | ✅ 本轮完成 | `test_frame` / `test_network` / `test_tcp_roundtrip` 通过 |
 | M3 | 路径与文件 I/O、`%TEMP%`、权限检查降级 | ✅ 本轮完成 | `test_file_transfer` / `test_transfer_meta` / `test_access_control*` 通过 |
 | M4 | 控制台中文输出 | ✅ 本轮完成 | `alice` / `bob` 中文日志、握手与文件表头均不乱码 |
-| M5 | Qt 界面 | ⛔ **未完成** | 主机无 Qt SDK（见 §23.8 决策点） |
+| M5 | Qt 界面 | ✅ 本轮完成（方案 A） | MSYS2 Qt 5.15.19；`st_ui` 0 错误 0 警告，离屏自动化会话通过，截图见 §23.10 |
 | M6 | 全量回归 + 重新采集证据 | ✅ 本轮完成 | Windows 与 Linux **各 16/16 测试全绿** + 跨系统双机 + 性能对比 |
 | M7 | 文档同步 | ✅ 本轮完成 | 本节 + `README.md` + `docs/performance.md` |
 
@@ -2284,11 +2286,11 @@ test_image_256x256.png    f8ea510fbcb5e006...  （VM 侧一致）
 
 ## 23.8 剩余工作与需要你决策的问题
 
-**决策点 1（阻塞 M5）：Qt 界面怎么装？**
+**决策点 1（已决策并完成）：Qt 界面怎么装？**
 
 主机上现有的 `D:\AppGallery\Qt\qt` **只是 Qt Creator 6.0.1 IDE**（自带 Qt 6 运行时 DLL），
 没有头文件、没有 `qmake`、没有 CMake 的 Qt5/Qt6 配置包，**无法用来编译 `st_ui`**。
-三条可选路线：
+当时给出三条路线，**用户选择 A**：
 
 | 方案 | 做法 | 代价 | 说明 |
 | --- | --- | --- | --- |
@@ -2296,13 +2298,18 @@ test_image_256x256.png    f8ea510fbcb5e006...  （VM 侧一致）
 | B | 官方 Qt 安装器装 Qt 6 + MinGW 套件 | 需要登录 Qt 账号，几 GB | 会多出一套 MinGW，与 MSYS2 那套并存 |
 | C | UI 保持在 Linux 演示，Windows 只交付命令行 | 0 | 课程要求 8 已在 Ubuntu 上完成并留了截图；但 Windows 上就不能演示界面 |
 
-**决策点 2（可选）：Windows 的监听端口要不要更严格？**
+**执行结果（2026-10-01）**：已安装 `mingw-w64-x86_64-qt5`（Qt 5.15.19）到
+`D:\AppGallery\dev-tools\msys64`；期间遇到镜像 404 与下载超时，
+用 `pacman -Syy` + `--disable-download-timeout` 重试后成功（共尝试 1 轮即通过）。
+CMake 重新探测后 `st_ui` 直接用 Qt5 构建，**代码零改动**。
+
+**决策点 2（已决策：保持现状）：Windows 的监听端口要不要更严格？**
 
 现在 Windows 上沿用 `SO_REUSEADDR`，好处是服务端重启后能立刻重新绑定同一端口；
 代价是**同一台机器上的另一个进程可以抢占同一个端口**（Windows 的语义与 Linux 不同）。
 如果更看重"端口不可被抢占"（安全课的角度），可以把 Windows 分支改成 `SO_EXCLUSIVEADDRUSE`；
 代价是该端口处于 TIME_WAIT 时（例如刚结束一次会话就重启 Bob）需要等几分钟才能重新监听。
-**目前保持现状**，等你决定。
+**用户选择保持现状**（`SO_REUSEADDR`），不改动。
 
 **其它剩余项（都不阻塞交付）**
 
@@ -2326,3 +2333,66 @@ test_image_256x256.png    f8ea510fbcb5e006...  （VM 侧一致）
    如果不查这一点，就会把"库用硬件、我们纯软件"的 20 倍差距说成"实现水平差距"。
 4. **迁移必须有反方向的回归**：Windows 全绿不代表 Linux 还活着；
    本轮两端各跑了一遍完整 `ctest` + 端到端演示，才算真正验证。
+
+## 23.10 Windows 图形界面（M5）验证
+
+**安装（方案 A）**
+
+| 项 | 结果 |
+| --- | --- |
+| 包 | `mingw-w64-x86_64-qt5`（Qt **5.15.19**） |
+| 位置 | `D:\AppGallery\dev-tools\msys64`（D 盘，与现有工具链同一套 ABI，未改动任何系统配置） |
+| 踩的坑 | 首次 `pacman -Sy` 后部分包 404（镜像同步滞后）+ 一个包下载超时；改用 `pacman -Syy` + `--disable-download-timeout` 重试即成功 |
+
+**构建**
+
+```text
+cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Release   → 已启用图形界面目标 st_ui（Qt 5.15.19）
+cmake --build build-win -j8                                    → 0 error，0 warning
+build-win/st_ui.exe（558 KB）
+```
+
+**运行前的一个必要条件**：`st_ui.exe` 依赖 `Qt5Core.dll / Qt5Gui.dll / Qt5Widgets.dll`，
+直接双击运行会因为找不到 DLL 而启动失败（Windows 错误码 `0xC0000135`）。
+两种做法：把 `D:\AppGallery\dev-tools\msys64\mingw64\bin` 加进 `PATH`，
+或用 `windeployqt` 把 DLL 复制到 exe 旁边（见下面的剩余项）。
+
+**自动化验证（不依赖人工点击）**
+
+界面自带 `--auto`、`--send-text / --send-file / --send-image / --cmd` 等参数，
+因此可以用两个实例跑完整会话：
+
+```bash
+export QT_QPA_PLATFORM=offscreen
+./build-win/st_ui.exe --server --auto --port 9820 --out-dir experiment_data/received_ui &
+./build-win/st_ui.exe --client --auto --host 127.0.0.1 --port 9820 \
+    --send-text "Hello from Qt UI on Windows" \
+    --send-file experiment_data/test_file_64KB.bin --cmd WHOAMI
+```
+
+实测结果：
+
+```text
+服务端：收到 HELLO → 发送 HELLO_ACK → AUTH 验证通过 → KEY_EXCHANGE 已发送
+        → KEY_CONFIRM 验证通过 → KEY_CONFIRM_ACK 已发送（握手 7 步完整）
+        [AccessControl] ALLOW alice(admin) send_message / send_file
+        [Transfer] 已接收 文件 test_file_64KB.bin（65536 字节，1 块，CRC32 校验通过）
+客户端：HELLO_ACK / AUTH / KEY_EXCHANGE / KEY_CONFIRM_ACK 全部验证通过
+接收端文件 sha256 与源文件一致（5eb4ca70d0ee472b…）
+```
+
+**界面截图**：`docs/screenshots/windows_ui_client.png`（801×545，Windows 桌面会话中实际渲染）。
+获取方式：脚本启动两个 `st_ui` 实例跑完一次会话后用 `PrintWindow` 抓取客户端窗口；
+复现命令见 `docs/screenshots/README.md`。
+
+**本轮发现但尚未修改的问题（等你决定）**：界面在**空闲**时按 250 ms 轮询接收，
+每次超时都由 `Network` / `Session` 以 **ERROR** 级别打印一行
+`recv() 超时，已接收 0/4 字节`（实测几秒钟就刷出 200+ 行）。
+这是**迁移前就存在**的行为（`docs/ui.md` §8 已记录"250 ms 轮询"这一设计妥协），
+不是 Windows 引入的。可选的改法（都属于"锦上添花"，不影响功能与正确性）：
+
+1. 在 `Network::receiveFrame()` / `SecureSession::receiveMessage()` 里把**超时**降为 DEBUG 级
+   （真正的错误仍用 ERROR）；
+2. 或给 `SecureSession` 增加一个"非阻塞尝试接收"接口，
+   让界面不必靠超时来轮询（同时消除最多 250 ms 的消息延迟）；
+3. 或仅在界面层静默（不改动网络/会话层）。

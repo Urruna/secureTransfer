@@ -2,6 +2,9 @@
 
 > 课程要求 8：**有良好的人机交互界面、合适的应用需求分析、合理的应用设计**（加分项）。
 > 本文说明界面的方案选择、功能设计、运行方式与已知限制。
+>
+> **2026-10-01 更新**：项目已迁移到 Windows，界面在 Windows 上也能编译运行
+> （MSYS2 `mingw-w64-x86_64-qt5`，Qt 5.15.19），见本文 §10。
 
 ---
 
@@ -145,3 +148,39 @@ bash scripts/ui_demo.sh          # 需要虚拟机桌面会话（DISPLAY=:0）
 
 教训：**任何"自动回应"机制都必须有终止条件**；演示用的自动回复虽然与安全性无关，
 但同样会把系统打爆。这也说明"端到端联调"不能只测理想路径。
+
+---
+
+## 10. Windows 侧运行（2026-10-01，迁移后）
+
+| 项 | Linux（原） | Windows（迁移后） |
+| --- | --- | --- |
+| Qt | Qt 5.12 Widgets（`qtbase5-dev`） | Qt **5.15.19**（MSYS2 `mingw-w64-x86_64-qt5`） |
+| 编译器 | g++ 9.4.0 | MinGW-w64 g++ 16.2.0 |
+| 构建 | `cmake .. && cmake --build .` | `cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build-win` |
+| 结果 | 可运行，截图 `ui_client.png` / `ui_server.png` | **0 错误 0 警告**；可运行，截图 `windows_ui_client.png` |
+| 代码改动 | — | **界面代码零改动**（只加了 `stconsole::ensureUtf8()` 一行，解决控制台中文乱码） |
+
+**运行注意**：`st_ui.exe` 依赖 `Qt5Core.dll / Qt5Gui.dll / Qt5Widgets.dll`，
+直接双击会因为找不到 DLL 而失败（错误码 `0xC0000135`）。把
+`D:\AppGallery\dev-tools\msys64\mingw64\bin` 加进 `PATH` 即可；
+或者用 `windeployqt` 打包后单独分发。
+
+**自动化验证**（不需要人工点击）：界面支持 `--auto` 与 `--send-text / --send-file / --cmd`，
+两个实例就能跑完整会话（离屏平台 `QT_QPA_PLATFORM=offscreen` 也行）：
+
+```bash
+./build-win/st_ui.exe --server --auto --port 9820 --out-dir experiment_data/received_ui &
+./build-win/st_ui.exe --client --auto --host 127.0.0.1 --port 9820 \
+    --send-text "Hello from Qt UI on Windows" \
+    --send-file experiment_data/test_file_64KB.bin --cmd WHOAMI
+```
+
+实测：握手 7 步全部完成；`ALLOW alice(admin) send_message / send_file`；
+文件 65536 字节、1 块、CRC32 校验通过，接收文件 sha256 与源文件一致。
+
+**已知问题（迁移前就存在，尚未修改）**：空闲时 250 ms 轮询会把每次
+`recv()` 超时按 ERROR 级别打到控制台，几秒钟就刷出几百行
+`recv() 超时，已接收 0/4 字节`。功能与安全判定不受影响，
+但日志噪声大。可选改法见 `Part2_transfer.md` §23.10（降级为 DEBUG /
+给 `SecureSession` 加非阻塞尝试接收 / 仅在界面层静默），需用户决策后再做。
