@@ -165,19 +165,22 @@ write_bat() {
 }
 
 write_bat "${DIST_DIR}/run_bob.bat" \
-    "@echo off" "cd /d \"%~dp0\"" \
+    "@echo off" "chcp 65001 >nul" "cd /d \"%~dp0\"" \
     "echo 启动服务端 Bob（默认端口 9000），按 Ctrl+C 结束" \
-    "bob.exe 9000 %*"
+    "bob.exe 9000 %*" \
+    "echo." "echo Bob 已退出（退出码 %ERRORLEVEL%）" "pause"
 
 write_bat "${DIST_DIR}/run_alice.bat" \
-    "@echo off" "cd /d \"%~dp0\"" \
+    "@echo off" "chcp 65001 >nul" "cd /d \"%~dp0\"" \
     "echo 启动客户端 Alice 连接 127.0.0.1:9000" \
-    "alice.exe 127.0.0.1 9000 %*"
+    "alice.exe 127.0.0.1 9000 %*" \
+    "echo." "echo Alice 已退出（退出码 %ERRORLEVEL%）" "pause"
 
 write_bat "${DIST_DIR}/run_ui.bat" \
-    "@echo off" "cd /d \"%~dp0\"" \
-    "echo 启动图形界面（Qt5）" \
-    "start \"\" st_ui.exe %*"
+    "@echo off" "chcp 65001 >nul" "cd /d \"%~dp0\"" \
+    "echo 启动图形界面（Qt5）；关闭这个窗口即结束程序" \
+    "st_ui.exe %*" \
+    "echo." "echo 界面已退出（退出码 %ERRORLEVEL%）" "pause"
 
 echo
 echo "=================== 7. 打包内容概览 ==================="

@@ -9,6 +9,14 @@
 
 **验证状态**
 
+> **只想拿 Windows 图形界面来用？** 不用编译、不用装 Qt/MSYS2：
+> 到 **[Releases](https://github.com/Urruna/secureTransfer/releases/latest)**
+> 下载 `securityTransfer-ui-win64.zip`（约 32 MB），解压后把
+> `configs\keys.conf.example` 复制成 `configs\keys.conf` 并填好 K_master，
+> 双击 `run_ui.bat` 即可。也可以用一行命令自动获取：
+> `powershell -ExecutionPolicy Bypass -File scripts\get_ui.ps1 -Token <你的GitHub token>`
+> （仓库是私有的，需要 token 或登录；脚本细节见 §4.4）
+
 | 环境 | 编译 | 测试 | 端到端 | 备注 |
 | --- | --- | --- | --- | --- |
 | Ubuntu 20.04 虚拟机（Ubuntu6.21，g++ 9.4.0） | 0 错误 0 警告 | `ctest` **16/16** | 4 条测试消息 + 4 个文件/图像逐字节一致 | 局域网双机 + 抓包证据；性能对比（OpenSSL 1.1.1） |
@@ -258,6 +266,30 @@ python scripts/capture_eve_windows.py --file experiment_data/test_file_64KB.bin
 报告里逐包列出 Type / SessionId / Sequence / Nonce / 密文 / CMAC，
 并检索"明文关键字、文件内容、K_master、K_session"，期望命中 0 次
 （实测结论见 [`docs/eavesdrop.md`](docs/eavesdrop.md)）。
+
+### 4.4 让别人拿到界面：Release 分发 + CI 自动出包
+
+**给别人用的下载入口**（仓库为私有，需要对方是 collaborator 并登录 GitHub）：
+
+* 固定链接：`https://github.com/Urruna/secureTransfer/releases/latest`
+* 直接下最新包：
+  `https://github.com/Urruna/secureTransfer/releases/latest/download/securityTransfer-ui-win64.zip`
+
+**一行命令自动获取并解压**（PowerShell，需要 repo 权限的 token）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\get_ui.ps1 -Token ghp_xxx
+# 结果：.\dist\securityTransfer\（含 run_ui.bat），脚本会打印 zip 的 SHA-256
+```
+
+**发布新版本（维护者）**：
+
+1. 打 tag 并发布 Release，例如 `git tag v1.2-windows-ui && git push origin v1.2-windows-ui`，
+   再在 GitHub 上点 "Draft a new release" 发布；
+2. 工作流 `.github/workflows/windows-ui.yml` 会自动：装 MSYS2 + Qt5 → 跑
+   `scripts/package_windows.sh` → 检查依赖完整性 → 打 zip → **把 zip 挂到这个 Release 上**；
+3. 平时 push 到 `main` 也会自动构建并上传 artifact（保留 90 天），
+   方便随时取最新界面验证，而不必等发版。
 
 ## 5. 关键设计决策（写报告时可以直接引用）
 
