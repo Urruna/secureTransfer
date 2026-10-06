@@ -223,6 +223,20 @@ bash scripts/ui_demo.sh          # 需要虚拟机桌面会话（DISPLAY=:0）
 那是有意为之）。截图见 `docs/screenshots/windows_ui_layout_default.png` 与
 `windows_ui_layout_min.png`。
 
+**同日补充修复（左列文字被裁）**：把左列放进滚动区时，横向滚动条被设成了"始终关闭"，
+而左列内容的**最小宽度是 538 px、滚动区可视宽度只有 424 px（最小窗口时 347 px）**，
+多出来的部分被**静默裁掉**——表现就是"界面最左那一栏的文字显示不全/看不到"。
+
+修法：
+
+1. 长标签（"对端身份（握手校验）"）改用 `QFormLayout::WrapLongRows` 独占一行，
+   左列最小宽度从 **538 px 降到 338 px**；
+2. 横向滚动条改回 `AsNeeded`——宁可出现滚动条，也不静默裁切内容；
+3. 左列最大宽度放宽到 560 px。
+
+验证（`--print-geometry` 新增打印 `leftScroll`）：**innerWidget 宽度 == viewport 宽度**
+（默认 507/507、最小窗口 347/347、窗口 1024 宽时 411/411），即左列不再有任何内容被裁。
+
 ### 11.2 只能传英文路径，中文路径的文件发不出去
 
 **根因**：Windows 上 `std::ifstream` / `std::ofstream` / `::_mkdir` 的窄字符接口

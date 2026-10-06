@@ -20,6 +20,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSpinBox>
 #include <QSizePolicy>
 #include <QSplitter>
@@ -78,6 +79,9 @@ void MainWindow::buildUi() {
 
     auto* connBox = new QGroupBox("1. 连接与身份");
     auto* connForm = new QFormLayout(connBox);
+    // 长标签（例如"对端身份（握手校验）"）单独占一行，而不是把整个标签列撑到 200px，
+    // 否则左列的"最小宽度"会远超滚动区可视宽度，右侧内容会被裁掉。
+    connForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
     roleBox_ = new QComboBox();
     roleBox_->addItems({"客户端（Alice，连接对端）", "服务端（Bob，等待连接）"});
     connForm->addRow("角色", roleBox_);
@@ -216,15 +220,16 @@ void MainWindow::buildUi() {
     auto* leftWidget = new QWidget();
     leftWidget->setLayout(leftColumn);
     // 左列放进滚动区：屏幕/窗口不够高时出现滚动条，而不是把控件压扁
-    auto* leftScroll = new QScrollArea();
-    leftScroll->setWidget(leftWidget);
-    leftScroll->setWidgetResizable(true);
-    leftScroll->setFrameShape(QFrame::NoFrame);
-    leftScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    leftScroll->setMaximumWidth(450);
+    leftScroll_ = new QScrollArea();
+    leftScroll_->setWidget(leftWidget);
+    leftScroll_->setWidgetResizable(true);
+    leftScroll_->setFrameShape(QFrame::NoFrame);
+    // 内容比可视区宽时**必须**能滚动，否则文字会被静默裁掉（之前就是这个问题）。
+    leftScroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    leftScroll_->setMaximumWidth(560);
     auto* rightWidget = new QWidget();
     rightWidget->setLayout(rightColumn);
-    mainLayout->addWidget(leftScroll);
+    mainLayout->addWidget(leftScroll_);
     mainLayout->addWidget(rightWidget, 1);
     setCentralWidget(central);
 
@@ -504,6 +509,33 @@ void MainWindow::printGeometry() const {
     dump("replayButton", replayButton_);
     dump("historyEdit", historyEdit_);
     dump("logEdit", logEdit_);
+
+    // 左列是滚动区：如果 viewport 比内容窄，内容就会被裁掉（表现就是"左边几列文字看不到"）
+    if (leftScroll_ != nullptr) {
+        const QWidget* inner = leftScroll_->widget();
+        std::printf("leftScroll     viewport=%d x %d  innerWidget=%d x %d  "
+                    "hScroll=%d vScroll=%d  innerMinWidth=%d\n",
+                    leftScroll_->viewport()->width(), leftScroll_->viewport()->height(),
+                    inner != nullptr ? inner->width() : -1, inner != nullptr ? inner->height() : -1,
+                    leftScroll_->horizontalScrollBar()->value(),
+                    leftScroll_->verticalScrollBar()->value(),
+                    inner != nullptr ? inner->minimumSizeHint().width() : -1);
+    }
+
+    // 所有标签/分组框：宽度小于 sizeHint 就说明文字被裁（省略号或直接消失）
+    for (const QLabel* label : findChildren<QLabel*>()) {
+        if (label->isVisible() && !label->text().isEmpty()) {
+            std::printf("label  %-26s w=%4d  sizeHintW=%4d  text=%s\n",
+                        "QLabel", label->width(), label->sizeHint().width(),
+                        label->text().left(24).toUtf8().constData());
+        }
+    }
+    for (const QGroupBox* box : findChildren<QGroupBox*>()) {
+        if (box->isVisible()) {
+            std::printf("group  w=%4d  x=%4d  sizeHintW=%4d  %s\n", box->width(), box->x(),
+                        box->sizeHint().width(), box->title().toUtf8().constData());
+        }
+    }
     std::fflush(stdout);
 }
 

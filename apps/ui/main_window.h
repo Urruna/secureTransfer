@@ -19,6 +19,7 @@ class QLineEdit;
 class QPlainTextEdit;
 class QProgressBar;
 class QPushButton;
+class QScrollArea;
 class QSpinBox;
 class QTextEdit;
 
@@ -119,6 +120,7 @@ private:
     QPushButton* replayButton_ = nullptr;
 
     QPlainTextEdit* logEdit_ = nullptr;
+    QScrollArea* leftScroll_ = nullptr;  ///< 左列的滚动区（小窗口时可滚动，不挤压控件）
     QString lastSendDirectory_;
     QVector<QPair<QString, QString>> pendingActions_;
     bool handshakeDone_ = false;
