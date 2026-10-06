@@ -114,6 +114,12 @@ public:
     /// 因此可以在循环里反复调用。
     WaitResult waitReadable(int timeoutMs);
 
+    /// 最多等待 timeoutMs 毫秒，直到**监听 socket** 上有新连接可以 accept()。
+    /// 用途：服务端不希望"卡死在 accept() 上无法取消"时，
+    /// 可以先探测再调用 accept()（见 SecureSession::acceptOneClient(waitMs)）。
+    /// 与 waitReadable() 一样：超时不是错误，不改 lastResult()/lastError()。
+    WaitResult waitAcceptable(int timeoutMs);
+
     Result lastResult() const;            ///< 最近一次操作的结果
     const std::string& lastError() const; ///< 最近一次失败的详细描述
 

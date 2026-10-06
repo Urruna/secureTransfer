@@ -263,6 +263,47 @@ ST_TEST_CASE("secure_roundtrip: tryReceiveMessage 区分「没有数据」「收
     ST_CHECK(server.error.empty());
 }
 
+ST_TEST_CASE("secure_roundtrip: acceptOneClient(超时) 可被打断，且监听保持有效") {
+    // 图形界面需要"等待客户端时也能点断开"，所以 accept 支持分片等待：
+    // 超时返回 false（不是失败），监听 socket 仍然有效，可以继续重试。
+    const Key128 key = testutil::testMasterKey(0x6C);
+
+    std::promise<std::uint16_t> portPromise;
+    auto portFuture = portPromise.get_future();
+    SessionConfig serverConfig = testutil::makeServerConfig(0, key);
+    serverConfig.onListening = [&portPromise](std::uint16_t port) {
+        portPromise.set_value(port);
+    };
+
+    AesCryptoProvider serverCrypto(nullptr);
+    SecureSession server(serverCrypto, serverConfig);
+
+    // ① 200 ms 内没有客户端接入：返回 false，且明确是"超时"而不是失败
+    ST_CHECK(!server.acceptOneClient(200));
+    ST_CHECK(server.lastAcceptTimedOut());
+    ST_CHECK(server.state() != SessionState::kFailed);
+    const std::uint16_t port = portFuture.get();  // onListening 已经回调过
+    ST_CHECK(port != 0);
+
+    // ② 客户端这时接入：服务端换成阻塞式继续等，应当正常完成握手
+    bool serverOk = false;
+    testutil::ThreadGuard serverThread(std::thread([&server, &serverOk]() {
+        serverOk = server.acceptOneClient();
+    }));
+
+    AesCryptoProvider clientCrypto(nullptr);
+    SecureSession client(clientCrypto, testutil::makeClientConfig(port, key));
+    ST_CHECK(client.connectToServer());
+    serverThread.join();
+
+    ST_CHECK(serverOk);
+    ST_CHECK(server.isEstablished());
+    ST_CHECK(!server.lastAcceptTimedOut());
+
+    client.close();
+    server.close();
+}
+
 int main() {
     return ::testutil::runAll("secure_roundtrip");
 }

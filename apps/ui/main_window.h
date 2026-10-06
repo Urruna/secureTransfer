@@ -41,6 +41,8 @@ public:
         QString outDir;
         QString accessLog;
         QVector<QPair<QString, QString>> actions;  ///< ("text"/"file"/"image"/"cmd", 参数)
+        QString geometry;                          ///< "宽x高"：强制窗口尺寸（例如 940x600）
+        bool printGeometry = false;                ///< 打印各控件实际尺寸后退出（排查布局问题）
     };
 
     explicit MainWindow(QWidget* parent = nullptr);
@@ -75,6 +77,8 @@ private:
     UiConfig collectConfig() const;
     QString resolvePath(const QString& relative, const QString& directory) const;
     void setSessionActive(bool active);
+    /// 打印窗口与关键控件的实际尺寸，用于确认"文字被压扁/显示不全"这类布局问题。
+    void printGeometry() const;
 
     SessionWorker* worker_ = nullptr;
 

@@ -106,7 +106,17 @@ public:
     bool connectToServer();
 
     /// 服务端：listen + accept + 完整握手。
-    bool acceptOneClient();
+    ///
+    /// @param clientWaitMs 等待客户端接入的最长时间（毫秒）：
+    ///        * `< 0`：一直等待（命令行 Bob 的默认行为，与旧版一致）；
+    ///        * `>= 0`：最多等这么久。超时返回 false，但 **监听 socket 仍然有效**，
+    ///          可以再次调用（超时原因见 lastAcceptTimedOut()）。
+    ///          图形界面用它实现"等待客户端时也能点断开"。
+    bool acceptOneClient(int clientWaitMs = -1);
+
+    /// 最近一次 acceptOneClient(waitMs >= 0) 是否是"等待客户端超时"（可以重试），
+    /// 而不是真正的失败（端口被占用 / socket 错误等）。
+    bool lastAcceptTimedOut() const { return acceptTimedOut_; }
 
     /// 发送业务数据（短消息 / 文件分块 / 图像都用它）。
     /// 内部：Nonce → AES-CTR 加密 → MAC(头部 + 密文) → sendFrame。
@@ -209,6 +219,7 @@ private:
     Bytes prefixC2S_;
     Bytes prefixS2C_;
     std::uint64_t sendSequence_ = 0;
+    bool acceptTimedOut_ = false;
     ReplayGuard replayGuard_;
     ProtocolStats stats_;
     std::string lastError_;

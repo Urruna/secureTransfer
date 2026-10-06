@@ -40,6 +40,8 @@ void printUsage() {
   --send-file <路径>         会话建立后自动发送该文件（可重复）
   --send-image <路径>        会话建立后自动发送该图像（可重复）
   --cmd <WHOAMI|VIEW_LOG>    会话建立后自动发送该命令（可重复）
+  --geometry <宽x高>         强制窗口尺寸，例如 --geometry 940x600（复现小窗口布局问题）
+  --print-geometry           打印各控件实际尺寸后退出（排查"文字显示不全"用）
   --help                     显示本帮助
 
 不带任何参数时，就是一个可以直接点击操作的图形界面。
@@ -99,6 +101,10 @@ int main(int argc, char** argv) {
             options.actions.append(qMakePair(QString("image"), args.at(++i)));
         } else if (arg == "--cmd" && hasNext) {
             options.actions.append(qMakePair(QString("cmd"), args.at(++i)));
+        } else if (arg == "--geometry" && hasNext) {
+            options.geometry = args.at(++i);
+        } else if (arg == "--print-geometry") {
+            options.printGeometry = true;
         }
     }
 

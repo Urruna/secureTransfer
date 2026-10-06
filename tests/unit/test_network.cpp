@@ -257,6 +257,51 @@ ST_TEST_CASE("Network: waitReadable 用于非阻塞探测（无数据=超时，�
     ST_CHECK(!fresh.lastError().empty());
 }
 
+namespace {
+
+/// 判断一段字节串是不是合法的 UTF-8。
+/// 用途：Windows 的 socket 错误文本原本取自本地代码页（GBK），
+/// 直接拼进 UTF-8 日志会变成乱码；这个测试就是防止它再次退化。
+bool isValidUtf8(const std::string& text) {
+    std::size_t i = 0;
+    while (i < text.size()) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        std::size_t extra = 0;
+        if (c <= 0x7F) {
+            extra = 0;
+        } else if ((c & 0xE0) == 0xC0) {
+            extra = 1;
+        } else if ((c & 0xF0) == 0xE0) {
+            extra = 2;
+        } else if ((c & 0xF8) == 0xF0) {
+            extra = 3;
+        } else {
+            return false;
+        }
+        if (i + extra >= text.size()) {
+            return false;
+        }
+        for (std::size_t k = 1; k <= extra; ++k) {
+            const unsigned char cc = static_cast<unsigned char>(text[i + k]);
+            if ((cc & 0xC0) != 0x80) {
+                return false;
+            }
+        }
+        i += extra + 1;
+    }
+    return true;
+}
+
+}  // namespace
+
+ST_TEST_CASE("Network: 连接失败的错误信息是合法 UTF-8（Windows 中文提示不乱码）") {
+    Network network;
+    ST_CHECK(!network.connect("127.0.0.1", 1));  // 端口 1 上没有服务，必然失败
+    const std::string error = network.lastError();
+    ST_CHECK(!error.empty());
+    ST_CHECK(isValidUtf8(error));
+}
+
 int main() {
     return ::testutil::runAll("network");
 }

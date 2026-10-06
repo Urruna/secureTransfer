@@ -56,6 +56,7 @@ endif()
 add_library(st_crypto STATIC
         src/common/random.cpp
         src/common/console.cpp
+        src/common/text_encoding.cpp
         src/crypto/aes.cpp
         src/crypto/cmac.cpp
         src/crypto/placeholder_mac_engine.cpp

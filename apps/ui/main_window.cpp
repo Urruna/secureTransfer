@@ -6,6 +6,7 @@
 #include "main_window.h"
 
 #include <QComboBox>
+#include <QApplication>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -18,11 +19,17 @@
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSpinBox>
+#include <QSizePolicy>
 #include <QSplitter>
 #include <QTextEdit>
 #include <QTime>
+#include <QTimer>
 #include <QVBoxLayout>
+
+#include <cstdio>
+#include <initializer_list>
 
 #include "common/path_utils.h"
 
@@ -61,7 +68,10 @@ MainWindow::~MainWindow() = default;
 
 void MainWindow::buildUi() {
     setWindowTitle("SecureTransfer — 安全的信息传输套件");
-    resize(1180, 760);
+    // 默认尺寸要能放进 1366×768 这类笔记本屏幕（否则系统会把窗口压缩，
+    // 控件被挤到"文字只显示一半"）；同时给出最小尺寸，保证再小也不会压变形。
+    resize(1120, 700);
+    setMinimumSize(960, 640);
 
     // ---- 左列：连接 + 会话 + 统计 ----
     auto* leftColumn = new QVBoxLayout();
@@ -135,6 +145,7 @@ void MainWindow::buildUi() {
     auto* messageLayout = new QVBoxLayout(messageBox);
     historyEdit_ = new QTextEdit();
     historyEdit_->setReadOnly(true);
+    historyEdit_->setMinimumHeight(110);
     inputEdit_ = new QLineEdit();
     inputEdit_->setPlaceholderText("输入要安全传输的短消息，回车或点击“发送”");
     sendButton_ = new QPushButton("发送");
@@ -177,17 +188,43 @@ void MainWindow::buildUi() {
     logEdit_ = new QPlainTextEdit();
     logEdit_->setReadOnly(true);
     logEdit_->setMaximumBlockCount(2000);
+    logEdit_->setMinimumHeight(130);
     logLayout->addWidget(logEdit_);
     rightColumn->addWidget(logBox, 2);
+
+    // 文本区会随内容增长而抬高 sizeHint，进而把整列撑大、把上面的控件压变形。
+    // 让它们在垂直方向"忽略 sizeHint"：高度完全由布局按剩余空间分配
+    // （配合上面的最小高度，既不会被压没，也不会挤别人）。
+    historyEdit_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
+    logEdit_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
+
+    // 给每个输入类控件设"最小高度 = 它自己的 sizeHint 高度"：
+    // 窗口变小、空间不够时，布局最多把它们压到最合适的尺寸，
+    // 不会再把按钮/下拉框压成 28px 这种"文字只剩半行"的状态。
+    const std::initializer_list<QWidget*> inputs = {
+        roleBox_,        hostEdit_,       portSpin_,       localIdBox_,      peerIdEdit_,
+        keyFileEdit_,    policyFileEdit_, outDirEdit_,     accessLogEdit_,   startButton_,
+        stopButton_,     inputEdit_,      sendButton_,     pickFileButton_,  pickImageButton_,
+        whoamiButton_,   viewLogButton_,  tamperButton_,   replayButton_,
+    };
+    for (QWidget* w : inputs) {
+        w->setMinimumHeight(w->sizeHint().height());
+    }
 
     auto* central = new QWidget();
     auto* mainLayout = new QHBoxLayout(central);
     auto* leftWidget = new QWidget();
     leftWidget->setLayout(leftColumn);
-    leftWidget->setMaximumWidth(430);
+    // 左列放进滚动区：屏幕/窗口不够高时出现滚动条，而不是把控件压扁
+    auto* leftScroll = new QScrollArea();
+    leftScroll->setWidget(leftWidget);
+    leftScroll->setWidgetResizable(true);
+    leftScroll->setFrameShape(QFrame::NoFrame);
+    leftScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    leftScroll->setMaximumWidth(450);
     auto* rightWidget = new QWidget();
     rightWidget->setLayout(rightColumn);
-    mainLayout->addWidget(leftWidget);
+    mainLayout->addWidget(leftScroll);
     mainLayout->addWidget(rightWidget, 1);
     setCentralWidget(central);
 
@@ -415,10 +452,59 @@ void MainWindow::applyOptions(const Options& options) {
         accessLogEdit_->setText(options.accessLog);
     }
     pendingActions_ = options.actions;
+    if (!options.geometry.isEmpty()) {
+        // "宽x高"：便于在小窗口下复现布局问题（例如 --geometry 940x600）
+        const QStringList parts = options.geometry.split(QLatin1Char('x'));
+        if (parts.size() == 2 && !parts.at(0).isEmpty() && !parts.at(1).isEmpty()) {
+            resize(parts.at(0).toInt(), parts.at(1).toInt());
+        }
+    }
+    if (options.printGeometry) {
+        // 等 show() 之后布局稳定下来再打印，然后退出（用于排查"文字被压扁"这类问题）
+        QTimer::singleShot(600, this, [this]() {
+            printGeometry();
+            QApplication::quit();
+        });
+    }
     if (options.autoStart) {
         appendLog("命令行指定了 --auto：自动开始会话");
         onStartClicked();
     }
+}
+
+void MainWindow::printGeometry() const {
+    const auto dump = [](const char* name, const QWidget* w) {
+        if (w == nullptr) {
+            return;
+        }
+        std::printf("%-14s %4d x %-4d  minimumHeight=%3d  sizeHintHeight=%3d\n", name, w->width(),
+                    w->height(), w->minimumHeight(), w->sizeHint().height());
+    };
+
+    std::printf("window         %4d x %-4d  minimum=%d x %d  dpr=%.2f\n", width(), height(),
+                minimumWidth(), minimumHeight(), devicePixelRatioF());
+    dump("roleBox", roleBox_);
+    dump("hostEdit", hostEdit_);
+    dump("portSpin", portSpin_);
+    dump("localIdBox", localIdBox_);
+    dump("peerIdEdit", peerIdEdit_);
+    dump("keyFileEdit", keyFileEdit_);
+    dump("policyFileEdit", policyFileEdit_);
+    dump("outDirEdit", outDirEdit_);
+    dump("accessLogEdit", accessLogEdit_);
+    dump("startButton", startButton_);
+    dump("stopButton", stopButton_);
+    dump("inputEdit", inputEdit_);
+    dump("sendButton", sendButton_);
+    dump("pickFileButton", pickFileButton_);
+    dump("pickImageButton", pickImageButton_);
+    dump("whoamiButton", whoamiButton_);
+    dump("viewLogButton", viewLogButton_);
+    dump("tamperButton", tamperButton_);
+    dump("replayButton", replayButton_);
+    dump("historyEdit", historyEdit_);
+    dump("logEdit", logEdit_);
+    std::fflush(stdout);
 }
 
 void MainWindow::onMessageReceived(const QString& type, const QString& text, int bytes) {

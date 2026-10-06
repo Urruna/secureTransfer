@@ -23,6 +23,7 @@
 #include "application/crc32.h"
 #include "application/file_transfer.h"
 #include "crypto/aes_crypto_provider.h"
+#include "common/path_utils.h"
 #include "security/session.h"
 
 namespace {
@@ -44,7 +45,8 @@ Bytes makeData(std::size_t size, std::uint32_t seed) {
 }
 
 std::string writeFile(const std::string& path, const Bytes& data) {
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    // 用 openOutputFile()：Windows 下走宽字符路径，中文文件名也能写
+    std::ofstream out = openOutputFile(path);
     out.write(reinterpret_cast<const char*>(data.data()),
               static_cast<std::streamsize>(data.size()));
     out.close();
@@ -52,7 +54,7 @@ std::string writeFile(const std::string& path, const Bytes& data) {
 }
 
 Bytes readFile(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in = openInputFile(path);
     return Bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 }
 
@@ -219,6 +221,70 @@ ST_TEST_CASE("file_transfer: 文本 + 文件 + 小图像 + 大图像端到端") 
 
     ST_CHECK_EQ(server.stats.rejectedMac, 0u);
     ST_CHECK_EQ(server.stats.rejectedReplay, 0u);
+}
+
+ST_TEST_CASE("file_transfer: 中文文件名与中文接收目录也能传输（Windows 宽字符路径）") {
+    // 背景：Windows 上 std::ifstream/ofstream/_mkdir 的窄字符接口按 ANSI 代码页（GBK）
+    // 解释路径，而本工程内部统一用 UTF-8，所以"带中文的文件名/目录名"曾经打不开。
+    // 现在统一走 openInputFile()/openOutputFile()（内部转宽字符），这里做端到端验证。
+    const std::string workDir = testutil::workDir("st_file_transfer_中文测试");
+    const std::string outDir = workDir + "/收到的文件";
+    ensureDir(workDir);
+    ensureDir(outDir);
+
+    const Bytes fileData = makeData(64u * 1024u + 7u, 0x1234ABCD);
+    const Bytes imageData = makeData(20u * 1024u, 0x55AA);
+    const std::string filePath = writeFile(workDir + "/测试文件_中文名.bin", fileData);
+    const std::string imagePath = writeFile(workDir + "/测试图像_中文名.png", imageData);
+
+    // 先确认"测试自己"能正确读写中文路径（否则下面失败会分不清是谁的问题）
+    ST_CHECK(readFile(filePath) == fileData);
+
+    std::promise<std::uint16_t> portPromise;
+    auto portFuture = portPromise.get_future();
+    const Key128 key = testutil::testMasterKey(0x7E);
+    SessionConfig serverConfig = testutil::makeServerConfig(0, key);
+    serverConfig.onListening = [&portPromise](std::uint16_t port) {
+        portPromise.set_value(port);
+    };
+
+    ServerResult server;
+    testutil::ThreadGuard serverThread(
+        std::thread(runServer, serverConfig, outDir, &server));
+    const std::uint16_t port = portFuture.get();
+
+    AesCryptoProvider crypto(nullptr);
+    SecureSession client(crypto, testutil::makeClientConfig(port, key));
+    ST_CHECK(client.connectToServer());
+
+    transfer::SendResult fileSent{};
+    sendOne(client, filePath, transfer::Kind::kFile, false, &fileSent);
+    transfer::SendResult imageSent{};
+    sendOne(client, imagePath, transfer::Kind::kImage, true, &imageSent);
+
+    ST_CHECK(client.sendMessage(MessageType::kClose, Bytes{}));
+    MessageType replyType = MessageType::kError;
+    Bytes reply;
+    ST_CHECK(client.receiveMessage(replyType, reply));
+    client.close();
+    serverThread.join();
+
+    ST_CHECK(server.handshakeOk);
+    ST_CHECK(server.finished);
+    ST_CHECK(server.error.empty());
+    ST_CHECK_EQ(server.transfers.size(), 2u);
+
+    // 文件名要保持中文（TLV 里就是 UTF-8 字节），落盘内容要逐字节一致
+    const transfer::ReceiveResult& fileGot = server.transfers[0];
+    ST_CHECK(fileGot.ok);
+    ST_CHECK_EQ(fileGot.fileName, std::string("测试文件_中文名.bin"));
+    ST_CHECK_EQ(fileGot.savedPath, outDir + "/测试文件_中文名.bin");
+    ST_CHECK(readFile(fileGot.savedPath) == fileData);
+
+    const transfer::ReceiveResult& imageGot = server.transfers[1];
+    ST_CHECK(imageGot.ok);
+    ST_CHECK_EQ(imageGot.fileName, std::string("测试图像_中文名.png"));
+    ST_CHECK(readFile(imageGot.savedPath) == imageData);
 }
 
 int main() {

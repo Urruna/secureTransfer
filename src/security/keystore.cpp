@@ -14,6 +14,7 @@
 #include <sstream>
 
 #include "common/hex.h"
+#include "common/path_utils.h"
 
 namespace {
 
@@ -100,7 +101,7 @@ bool KeyStore::loadFile(const std::string& path,
                         KeyStoreConfig& out,
                         std::string& error,
                         std::string& warning) {
-    std::ifstream file(path);
+    std::ifstream file = openInputFile(path, std::ios::in);
     if (!file) {
         error = "无法打开密钥配置文件: " + path;
         return false;

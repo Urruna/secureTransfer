@@ -21,9 +21,11 @@
 #include <iomanip>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include "application/file_transfer.h"
 #include "common/path_utils.h"
+#include "common/text_encoding.h"
 #include "security/access_control.h"
 #include "common/hex.h"
 #include "common/log.h"
@@ -149,6 +151,10 @@ int main(int argc, char** argv) {
     stconsole::ensureUtf8();
     stlog::initFromEnvironment();
 
+    // 统一把命令行参数转成 UTF-8：Windows 上 argv 是 ANSI 代码页（GBK），
+    // 直接用会让 `--out-dir D:\测试\收到的文件` 这类中文路径失效。
+    const std::vector<std::string> args = sttext::utf8CommandLine(argc, argv);
+
     std::uint16_t port = 9000;
     std::string keyPath;
     bool useMock = false;
@@ -160,20 +166,20 @@ int main(int argc, char** argv) {
     std::string identityOverride;
     std::string peerOverride;
 
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg = argv[i];
-        if (arg == "--key" && i + 1 < argc) {
-            keyPath = argv[++i];
-        } else if (arg == "--out-dir" && i + 1 < argc) {
-            outDir = argv[++i];
-        } else if (arg == "--policy" && i + 1 < argc) {
-            policyPath = argv[++i];
-        } else if (arg == "--access-log" && i + 1 < argc) {
-            accessLogPath = argv[++i];
-        } else if (arg == "--id" && i + 1 < argc) {
-            identityOverride = argv[++i];
-        } else if (arg == "--peer" && i + 1 < argc) {
-            peerOverride = argv[++i];
+    for (std::size_t i = 1; i < args.size(); ++i) {
+        const std::string arg = args[i];
+        if (arg == "--key" && i + 1 < args.size()) {
+            keyPath = args[++i];
+        } else if (arg == "--out-dir" && i + 1 < args.size()) {
+            outDir = args[++i];
+        } else if (arg == "--policy" && i + 1 < args.size()) {
+            policyPath = args[++i];
+        } else if (arg == "--access-log" && i + 1 < args.size()) {
+            accessLogPath = args[++i];
+        } else if (arg == "--id" && i + 1 < args.size()) {
+            identityOverride = args[++i];
+        } else if (arg == "--peer" && i + 1 < args.size()) {
+            peerOverride = args[++i];
         } else if (arg == "--mock") {
             useMock = true;
         } else if (arg == "--placeholder") {

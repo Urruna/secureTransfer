@@ -11,6 +11,7 @@
 #include <sstream>
 
 #include "common/log.h"
+#include "common/path_utils.h"
 
 namespace acl {
 
@@ -190,7 +191,7 @@ bool AccessController::loadText(const std::string& text, std::string& error) {
 
 bool AccessController::loadFile(const std::string& path, std::string& error,
                                 std::string& warning) {
-    std::ifstream file(path);
+    std::ifstream file = openInputFile(path, std::ios::in);
     if (!file) {
         error = "无法打开访问控制策略文件: " + path;
         return false;
@@ -240,7 +241,7 @@ bool AccessController::setAuditLogFile(const std::string& path, std::string& err
     if (path.empty()) {
         return true;
     }
-    auditFile_.open(path, std::ios::out | std::ios::app);
+    auditFile_ = openOutputFile(path, std::ios::out | std::ios::app);
     if (!auditFile_) {
         error = "无法打开审计日志文件: " + path;
         return false;

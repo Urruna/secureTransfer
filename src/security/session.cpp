@@ -485,7 +485,8 @@ bool SecureSession::connectToServer() {
     return true;
 }
 
-bool SecureSession::acceptOneClient() {
+bool SecureSession::acceptOneClient(int clientWaitMs) {
+    acceptTimedOut_ = false;
     isServer_ = true;
     if (!config_.hasMasterKey) {
         return fail("尚未加载 K_master，无法进行身份认证");
@@ -494,17 +495,41 @@ bool SecureSession::acceptOneClient() {
         return fail("localId / peerId 不能为空");
     }
 
-    if (!network_.listen(config_.port)) {
-        state_ = SessionState::kFailed;
-        return fail("监听端口 " + std::to_string(config_.port) + " 失败: " +
-                    network_.lastError());
+    // 注意：允许重复调用（界面用"分片等待 + 重试"实现可取消的 accept），
+    // 因此第二次进来时不要重复 listen（同一端口再次 bind 会失败）。
+    if (!network_.isListening()) {
+        if (!network_.listen(config_.port)) {
+            state_ = SessionState::kFailed;
+            return fail("监听端口 " + std::to_string(config_.port) + " 失败: " +
+                        network_.lastError());
+        }
+        if (config_.onListening) {
+            config_.onListening(network_.boundPort());
+        }
     }
-    if (config_.onListening) {
-        config_.onListening(network_.boundPort());
-    }
-    if (!network_.accept()) {
-        state_ = SessionState::kFailed;
-        return fail(std::string("accept() 失败: ") + network_.lastError());
+
+    if (clientWaitMs < 0) {
+        // 不限时等待（命令行 Bob）：行为与旧版完全一致
+        if (!network_.accept()) {
+            state_ = SessionState::kFailed;
+            return fail(std::string("accept() 失败: ") + network_.lastError());
+        }
+    } else {
+        // 分片等待：先探测监听 socket 是否可读，超时就返回（监听仍然有效，可重试）
+        const Network::WaitResult wait = network_.waitAcceptable(clientWaitMs);
+        if (wait == Network::WaitResult::kTimeout) {
+            acceptTimedOut_ = true;
+            lastError_ = "等待客户端连接超时";
+            return false;  // 不是失败：state_ 保持未握手状态，监听 socket 继续可用
+        }
+        if (wait == Network::WaitResult::kError) {
+            state_ = SessionState::kFailed;
+            return fail(std::string("等待客户端连接失败: ") + network_.lastError());
+        }
+        if (!network_.accept()) {
+            state_ = SessionState::kFailed;
+            return fail(std::string("accept() 失败: ") + network_.lastError());
+        }
     }
     state_ = SessionState::kTcpConnected;
     network_.setReceiveTimeoutMs(config_.handshakeTimeoutMs);

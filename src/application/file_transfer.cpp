@@ -13,6 +13,7 @@
 
 #include "application/crc32.h"
 #include "common/log.h"
+#include "common/path_utils.h"
 #include "protocol/packet.h"
 
 namespace transfer {
@@ -46,7 +47,8 @@ SendResult FileSender::send(SecureSession& session,
     result.kind = kind;
     result.fileName = baseName(path);
 
-    std::ifstream input(path, std::ios::binary);
+    // openInputFile()：Windows 下用宽字符路径打开，支持中文路径（见 common/path_utils.h）
+    std::ifstream input = openInputFile(path);
     if (!input) {
         result.error = "无法打开待发送文件: " + path;
         return result;
@@ -178,7 +180,7 @@ bool TransferReceiver::beginTransfer(MessageType type, const Bytes& body, std::s
     }
 
     const std::string savedPath = joinPath(outputDir_, meta.fileName);
-    file_.open(savedPath, std::ios::binary | std::ios::trunc);
+    file_ = openOutputFile(savedPath);
     if (!file_) {
         if (error != nullptr) {
             *error = "无法创建接收文件: " + savedPath;
@@ -303,7 +305,7 @@ bool TransferReceiver::finishTransfer(const Bytes& body, std::string* error) {
 
     // 再读一次落盘文件做校验：确认"真正写到磁盘上的字节"也正确
     if (ok) {
-        std::ifstream check(lastResult_.savedPath, std::ios::binary);
+        std::ifstream check = openInputFile(lastResult_.savedPath);
         if (!check) {
             ok = false;
             reason = "无法重新读取接收文件做校验";

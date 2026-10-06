@@ -208,9 +208,31 @@ void SessionWorker::run(UiConfig config) {
 
     // ---------------- 4. 建立会话（TCP + 完整握手）----------------
     emit stateChanged(config.isServer ? "正在监听…" : "正在连接…");
-    const bool connected =
-        config.isServer ? session.acceptOneClient() : session.connectToServer();
-    if (!connected) {
+    if (config.isServer) {
+        // 服务端：分片等待客户端接入（每 200 ms 醒一次），
+        // 这样"等待中"也能立刻响应界面上的"断开"，不会卡死在 accept() 里。
+        emit logLine("正在等待客户端接入…（可随时点击“断开”取消）");
+        bool connected = false;
+        while (!stopRequested_) {
+            if (session.acceptOneClient(200)) {
+                connected = true;
+                break;
+            }
+            if (!session.lastAcceptTimedOut()) {
+                emit sessionStopped("握手失败：" +
+                                    QString::fromStdString(session.lastError()));
+                running_ = false;
+                return;
+            }
+        }
+        if (!connected) {
+            emit logLine("已取消等待客户端连接");
+            emit sessionStopped("已主动断开（尚未等到客户端）");
+            session.close();
+            running_ = false;
+            return;
+        }
+    } else if (!session.connectToServer()) {
         emit sessionStopped("握手失败：" + QString::fromStdString(session.lastError()));
         running_ = false;
         return;
@@ -229,6 +251,7 @@ void SessionWorker::run(UiConfig config) {
 
     // ---------------- 5. 收发循环 ----------------
     bool droppingTransfer = false;  // 被访问控制拒绝的传输：丢弃后续数据块，不落盘
+    bool stoppedNotified = false;   // 是否已经发过 sessionStopped（避免重复/遗漏）
     while (!stopRequested_) {
         // 5.1 先执行界面下发的命令
         Command command;
@@ -351,12 +374,14 @@ void SessionWorker::run(UiConfig config) {
         if (status == SecureSession::ReceiveStatus::kClosed) {
             emit sessionStopped("接收失败（会话终止）：" +
                                 QString::fromStdString(session.lastError()));
+            stoppedNotified = true;
             break;
         }
 
         if (type == MessageType::kClose) {
             emit logLine("收到对端 CLOSE，会话正常结束");
             emit sessionStopped("对端主动结束了会话");
+            stoppedNotified = true;
             break;
         }
 
@@ -486,6 +511,12 @@ void SessionWorker::run(UiConfig config) {
     }
 
     emit statsUpdated(QString::fromStdString(session.stats().summary()));
+    // 用户点"断开"时，循环会直接退出而不会走到上面的分支；
+    // 这里统一补发一次 sessionStopped，界面才能把状态与按钮复位
+    // （之前缺了这一步，界面会一直停在"正在结束会话…"，只能重启程序）。
+    if (!stoppedNotified) {
+        emit sessionStopped(stopRequested_ ? "已主动断开连接" : "会话已结束");
+    }
     session.close();
     running_ = false;
 }

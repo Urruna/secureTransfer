@@ -39,6 +39,7 @@
 #endif
 
 #include "common/log.h"
+#include "common/text_encoding.h"
 
 namespace {
 
@@ -98,7 +99,28 @@ bool isPeerGone(int code) {
 }
 std::string describeError(int code) {
     std::ostringstream oss;
-    oss << "WSA error " << code << " (" << std::system_category().message(code) << ")";
+    oss << "WSA error " << code << " (";
+    // 注意：std::system_category().message() 返回的是**本地代码页（GBK）**文本，
+    // 而本工程内部/控制台统一用 UTF-8，直接拼进去会变成乱码。
+    // 这里改用宽字符版本再转 UTF-8，中文错误信息才不会乱码。
+    LPWSTR buffer = nullptr;
+    const DWORD length = ::FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+            FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr, static_cast<DWORD>(code), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        reinterpret_cast<LPWSTR>(&buffer), 0, nullptr);
+    if (length > 0 && buffer != nullptr) {
+        std::wstring message(buffer, length);
+        ::LocalFree(buffer);
+        while (!message.empty() &&
+               (message.back() == L'\r' || message.back() == L'\n' || message.back() == L' ')) {
+            message.pop_back();
+        }
+        oss << sttext::toUtf8(message);
+    } else {
+        oss << "unknown error";
+    }
+    oss << ")";
     return oss.str();
 }
 void closeSocket(SocketHandle handle) {
@@ -578,19 +600,10 @@ bool Network::setSendTimeoutMs(int timeoutMs) {
     return applyTimeout(false, timeoutMs);
 }
 
-Network::WaitResult Network::waitReadable(int timeoutMs) {
-    if (timeoutMs < 0) {
-        (void)fail(Result::INVALID_ARGUMENT, "waitReadable() 参数非法：超时时间不能为负数");
-        return WaitResult::kError;
-    }
-    if (connectionSocket_ == kInvalidSocket) {
-        (void)fail(Result::NOT_CONNECTED,
-                   "waitReadable() 失败：尚未 connect() 或 accept()，没有可用连接");
-        return WaitResult::kError;
-    }
+namespace {
 
-    const SocketHandle handle = toHandle(connectionSocket_);
-
+/// 在单个 socket 上等待"可读"。kError 时的具体错误码由调用方通过 lastSocketError() 取。
+Network::WaitResult waitHandleReadable(SocketHandle handle, int timeoutMs) {
     for (;;) {
         fd_set readSet;
         FD_ZERO(&readSet);
@@ -608,22 +621,59 @@ Network::WaitResult Network::waitReadable(int timeoutMs) {
             ::select(static_cast<int>(handle) + 1, &readSet, nullptr, nullptr, &timeout);
 #endif
         if (ready > 0) {
-            return WaitResult::kReadable;
+            return Network::WaitResult::kReadable;
         }
         if (ready == 0) {
             // 没有数据：这不是错误，故意不设置 lastResult_ / lastError_。
-            return WaitResult::kTimeout;
+            return Network::WaitResult::kTimeout;
         }
 
         const int code = lastSocketError();
         if (isInterrupted(code)) {
             continue;  // 被信号打断（POSIX 上 timeout 会被改写，重试即可）
         }
-        (void)fail(Result::SOCKET_FAILURE, std::string("select() 失败: ") + describeError(code));
-        return WaitResult::kError;
+        return Network::WaitResult::kError;
     }
 }
 
+}  // namespace
+
+Network::WaitResult Network::waitReadable(int timeoutMs) {
+    if (timeoutMs < 0) {
+        (void)fail(Result::INVALID_ARGUMENT, "waitReadable() 参数非法：超时时间不能为负数");
+        return WaitResult::kError;
+    }
+    if (connectionSocket_ == kInvalidSocket) {
+        (void)fail(Result::NOT_CONNECTED,
+                   "waitReadable() 失败：尚未 connect() 或 accept()，没有可用连接");
+        return WaitResult::kError;
+    }
+
+    const WaitResult result = waitHandleReadable(toHandle(connectionSocket_), timeoutMs);
+    if (result == WaitResult::kError) {
+        (void)fail(Result::SOCKET_FAILURE,
+                   std::string("select() 失败: ") + describeError(lastSocketError()));
+    }
+    return result;
+}
+
+Network::WaitResult Network::waitAcceptable(int timeoutMs) {
+    if (timeoutMs < 0) {
+        (void)fail(Result::INVALID_ARGUMENT, "waitAcceptable() 参数非法：超时时间不能为负数");
+        return WaitResult::kError;
+    }
+    if (listenSocket_ == kInvalidSocket) {
+        (void)fail(Result::NOT_CONNECTED, "waitAcceptable() 失败：还没有成功 listen()");
+        return WaitResult::kError;
+    }
+
+    const WaitResult result = waitHandleReadable(toHandle(listenSocket_), timeoutMs);
+    if (result == WaitResult::kError) {
+        (void)fail(Result::SOCKET_FAILURE,
+                   std::string("select() 失败: ") + describeError(lastSocketError()));
+    }
+    return result;
+}
 void Network::close() {
     if (listenSocket_ != kInvalidSocket) {
         closeSocket(toHandle(listenSocket_));

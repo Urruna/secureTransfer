@@ -2632,3 +2632,64 @@ K_session、K_master**——与 `project_q1.md` §9.1 的预期完全一致。
    需要额外复制 VC 运行时（`vcredist`）；
 3. 抓包脚本默认连虚拟机里的 Bob（需要 VMware 与 vmrun）；
    没有虚拟机时用 `--local` 也能复现，只是抓的是本机回环。
+
+---
+
+# 26. 第十一轮：修复界面使用中的五个问题（2026-10-06）
+
+用户在实际使用图形界面后反馈了 5 个问题，本轮逐一定位、修复并补了回归测试。
+
+## 26.1 问题 → 根因 → 修法
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 1 | 非最大化时"选项框文字只显示一半" | 默认窗口 1180×760 在小屏幕/被缩放桌面上会被压缩；布局在空间不足时把按钮压到 28 px（自身需要 34 px）；左列没有滚动区 | 默认尺寸改 1120×700、最小 960×640；每个输入控件的**最小高度 = 自身 `sizeHint().height()`**；左列放进 `QScrollArea`；历史/日志区垂直 `QSizePolicy::Ignored`，不再用内容撑大布局 |
+| 2 | 只能传英文路径，中文路径发不出去 | Windows 上 `std::ifstream/ofstream/_mkdir` 的窄字符接口按 **ANSI(GBK)** 解释路径，而内部统一 UTF-8 | 新增 `openInputFile/openOutputFile`（Windows 先转宽字符）、`ensureDirectory` 改 `_wmkdir` 并跳过盘符、命令行参数经 `GetCommandLineW` 转 UTF-8 |
+| 3 | 点"断开"后停在"正在结束会话…"，只能重启程序 | ① 服务端线程永久阻塞在 `accept()`，断开无效；② 主动断开时工作线程不发 `sessionStopped`，界面按钮永远不复位 | 新增 `Network::waitAcceptable()` 与 `SecureSession::acceptOneClient(waitMs)`（超时可重试、监听保持有效）；界面工作线程按 200 ms 分片等待并检查停止标志；退出循环时统一补发 `sessionStopped` |
+| 4 | 日志里出现 `WSA error ...(乱码)` | `std::system_category().message()` 返回本地代码页（GBK）文本，被当 UTF-8 打印 | Windows 分支改用 `FormatMessageW` + 转 UTF-8，现在显示为 `WSA error 10061 (由于目标计算机积极拒绝，无法连接。)` |
+| 5 | 是否支持两台主机通信 | 不是缺陷，是使用说明缺失 | 在 `docs/ui.md` §11.5 写清两台主机的用法（角色选择、对端地址、K_master 一致、防火墙放行），并指向既有实测记录 |
+
+## 26.2 代码改动清单
+
+| 文件 | 改动 |
+| --- | --- |
+| `include/common/text_encoding.h`（新）<br>`src/common/text_encoding.cpp`（新） | UTF-8 ↔ UTF-16 转换；`utf8CommandLine()`（Windows 用 `GetCommandLineW + CommandLineToArgvW`） |
+| `include/common/path_utils.h` | 新增 `widePathForFileApi` / `openInputFile` / `openOutputFile`；`ensureDirectory` 支持中文路径与盘符 |
+| `src/application/file_transfer.cpp`、`src/security/access_control.cpp`、`src/security/keystore.cpp`、`apps/alice/main.cpp` | 所有文件读写改用上面两个 helper |
+| `apps/alice/main.cpp`、`apps/bob/main.cpp` | 命令行参数统一转 UTF-8 |
+| `include/network/network.h` / `src/network/network.cpp` | 新增 `waitAcceptable()`；`describeError()` 的 Windows 分支改为 `FormatMessageW` + UTF-8 |
+| `include/security/session.h` / `src/security/session.cpp` | `acceptOneClient(int clientWaitMs = -1)` + `lastAcceptTimedOut()`；重复调用时不再重复 `listen()` |
+| `apps/ui/session_worker.cpp` | 服务端分片等待客户端（可被"断开"打断）；退出时统一补发 `sessionStopped` |
+| `apps/ui/main_window.cpp/.h`、`apps/ui/main.cpp` | 布局加固（默认/最小尺寸、最小高度、左列滚动、文本区不撑布局）；新增 `--geometry WxH` 与 `--print-geometry` 诊断开关 |
+| `tests/integration/test_file_transfer.cpp` | 新增「中文文件名与中文接收目录也能传输」 |
+| `tests/integration/test_secure_roundtrip.cpp` | 新增「`acceptOneClient(超时)` 可被打断，且监听保持有效」 |
+| `tests/unit/test_network.cpp` | 新增「连接失败的错误信息是合法 UTF-8」 |
+
+## 26.3 实测结果
+
+**布局**（用新增的 `--print-geometry` 让 Qt 自己报尺寸）：
+
+```text
+默认 1120x700：所有按钮/输入控件实际高度 >= 自身 sizeHint（按钮 34px、输入框 28px）
+最小 960x640：同样满足——只有两个可滚动文本区低于 sizeHint（有意为之）
+```
+
+**功能回归**：
+
+```text
+Windows（MinGW-w64）：0 错误 0 警告，ctest 16/16
+  test_network 12/12（含新用例）test_secure_roundtrip 4/4（含新用例）test_file_transfer 2/2（含新用例）
+Linux（Ubuntu 20.04 / g++ 9.4）：0 错误 0 警告，ctest 16/16，Alice/Bob 演示 + 4 个文件/图像逐字节一致
+界面端到端：两个 st_ui 实例，中文目录 + 中文文件名传输，接收文件 sha256 与源文件一致
+错误文本：connect() 失败: WSA error 10061 (由于目标计算机积极拒绝，无法连接。)
+```
+
+## 26.4 保留的说明
+
+1. `acceptOneClient(waitMs)` 的"超时"与"失败"必须分开看：超时（`lastAcceptTimedOut()`）
+   说明监听还活着、可以继续等；失败才需要放弃并报错。命令行 Bob 仍用默认的"永久等待"，
+   行为与旧版完全一致。
+2. 中文路径的修复是**双向**的：不仅要能打开中文路径的文件，还要能创建中文目录、
+   把中文文件名放进传输元数据（TLV 里本来就是 UTF-8 字节）——三处都验证过。
+3. 界面布局的"根因"是小屏幕上窗口被压缩，因此**最小尺寸**是这次修复的关键；
+   如果将来要在更小的屏幕上用，可以再调小 `setMinimumSize()`，或者把右列也改成可滚动。

@@ -189,3 +189,106 @@ bash scripts/ui_demo.sh          # 需要虚拟机桌面会话（DISPLAY=:0）
 现已改为 `SecureSession::tryReceiveMessage()`：没有数据时返回 `kNothing`，
 不产生任何错误日志。同一场景实测：客户端日志从 **352 行降到 11 行、超时行 0 条**
 （服务端 15 行、超时 0 条），文件传输与访问控制判定不受影响。
+
+---
+
+## 11. 2026-10-06 修复的五个使用问题
+
+### 11.1 非最大化时"选项框文字只显示一半"
+
+**现象**：窗口不是最大化时，下拉框/按钮里的文字看起来被压扁、只剩半行。
+
+**根因**：默认窗口是 1180×760，在小屏幕（或被系统缩放过的桌面）上会被压缩；
+而布局在空间不足时会继续把控件往下压（按钮被压到 28 px，而它自身需要 34 px），
+文字就被裁掉了；左列又没有滚动区，只能硬挤。
+
+**修法**：
+
+1. 默认尺寸改为 1120×700，并设 `setMinimumSize(960, 640)`——再小也不会压变形；
+2. 每个输入类控件的最小高度设成**它自己的 `sizeHint().height()`**（按钮 34 px、输入框 28 px），
+   布局不可能再把文字压掉；
+3. 左列（连接/状态/统计）放进 `QScrollArea`：高度不够时出现滚动条，而不是挤压；
+4. 消息历史与运行日志在垂直方向设 `QSizePolicy::Ignored`：
+   它们的 `sizeHint`（内容越长越大）不再撑大布局，长度增长只影响自身滚动条。
+
+**怎么验证**（新增诊断开关，任何人都能自查）：
+
+```powershell
+.\build-win\st_ui.exe --print-geometry                 # 默认尺寸
+.\build-win\st_ui.exe --geometry 960x640 --print-geometry   # 最小尺寸
+```
+
+输出每个控件的实际高/最小高/建议高。实测结果：默认与最小尺寸下，
+所有按钮与输入控件的实际高度都 ≥ 自身 sizeHint（只有两个可滚动的文本区低于 sizeHint，
+那是有意为之）。截图见 `docs/screenshots/windows_ui_layout_default.png` 与
+`windows_ui_layout_min.png`。
+
+### 11.2 只能传英文路径，中文路径的文件发不出去
+
+**根因**：Windows 上 `std::ifstream` / `std::ofstream` / `::_mkdir` 的窄字符接口
+按 **ANSI 代码页（简体中文系统 = GBK）** 解释路径，而本工程内部统一用 UTF-8，
+于是"带中文的文件名/目录名"打不开（Linux 下路径本身就是字节串，所以没这个问题）。
+
+**修法**（`include/common/path_utils.h`）：
+
+* 新增 `openInputFile()` / `openOutputFile()`：Windows 下先把 UTF-8 转成宽字符再打开；
+* `ensureDirectory()` 改用 `_wmkdir`，并正确处理盘符（`D:\...` 不再尝试创建 "D:"）；
+* 命令行参数改用 `GetCommandLineW + CommandLineToArgvW` 转 UTF-8
+  （`include/common/text_encoding.h`），所以 `--file D:\测试\图像.png` 也能用。
+
+**验证**：新增用例「中文文件名与中文接收目录也能传输」，
+在 Windows 与 Ubuntu 两边都通过；界面里也实测跑通
+（一个界面实例从中文目录发中文名文件，另一个界面实例收进中文目录，sha256 一致）。
+
+### 11.3 点"断开"后一直停在"正在结束会话…"，只能重启程序
+
+**两个根因（都修了）**：
+
+1. **服务端线程卡死在 `accept()`**：以前的 `accept()` 是永久阻塞的，
+   在"等待客户端接入"时点断开没有任何效果，线程不退出；
+2. **界面收不到结束通知**：主动断开时工作线程退出循环后没有发 `sessionStopped`，
+   所以界面状态与按钮永远停在"会话中"，看起来像死机。
+
+**修法**：
+
+* `Network` 新增 `waitAcceptable(timeoutMs)`（在监听 socket 上 select）；
+* `SecureSession::acceptOneClient(waitMs)` 支持分片等待：超时返回 `false`
+  但**监听保持有效**，可以继续重试（`lastAcceptTimedOut()` 区分"超时"与"真失败"）；
+* 界面工作线程用 200 ms 分片等待客户端，每片都检查"是否点了断开"，
+  并在退出循环时**统一补发** `sessionStopped`，界面立即复位。
+
+**验证**：新增用例「`acceptOneClient(超时)` 可被打断，且监听保持有效」
+（Windows + Linux 都通过）：先超时返回、确认 state 未失败、随后仍能成功接受真实客户端并完成握手。
+
+### 11.4 运行日志里的 `WSA error ...(乱码)` 
+
+**根因**：Windows 上 `std::system_category().message(code)` 返回的是**本地代码页（GBK）**文本，
+被当成 UTF-8 输出就变成乱码。
+
+**修法**：`Network::describeError()` 的 Windows 分支改用 `FormatMessageW` 取宽字符，
+再转成 UTF-8。现在会正常显示为：
+
+```text
+connect() 失败: WSA error 10061 (由于目标计算机积极拒绝，无法连接。)
+```
+
+**验证**：新增用例「连接失败的错误信息是合法 UTF-8」（Windows + Linux 都通过）。
+
+### 11.5 支持两台主机通信吗？
+
+**支持**，这也是课程要求 6。两种用法都在 `docs/lan_test.md` 里有实测记录：
+
+* **命令行**：A 机跑 `bob <端口>`（监听），B 机跑 `alice <A机IP> <端口>`；
+* **图形界面**：一端角色选"服务端（Bob）"点"启动/连接"等待；另一端选"客户端（Alice）"，
+  "对端地址"填对方的 IP、端口两边一致，点"启动/连接"。
+
+需要注意三件事：
+
+1. **K_master 必须相同**：两端 `configs/keys.conf` 里的 `master_key` 要一致，
+   否则握手会报"认证失败"（这是设计如此，不是 bug）；
+2. **身份要对得上**：服务端的"对端身份"应等于客户端的"本端身份"（默认 bob / alice）；
+3. **网络要通**：两台机器能互相 ping 通；Windows 首次监听会弹防火墙提示，要选"允许"，
+   或提前放行该端口（跨网段/路由器还需要端口映射）。
+
+已实测：Windows（物理机）↔ Ubuntu 621（虚拟机）双向通信成功，
+接收文件 sha256 与源文件一致；Linux 侧还有网络命名空间模拟的两台独立主机测试。

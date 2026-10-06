@@ -33,6 +33,8 @@
 
 #include "common/hex.h"
 #include "common/log.h"
+#include "common/path_utils.h"
+#include "common/text_encoding.h"
 #include "common/types.h"
 #include "common/console.h"
 #include "application/file_transfer.h"
@@ -119,7 +121,7 @@ std::string resolveDataPath(const std::string& path, const std::string& dataDir)
         candidates.push_back("../" + dataDir + "/" + path);
     }
     for (const std::string& candidate : candidates) {
-        std::ifstream probe(candidate, std::ios::binary);
+        std::ifstream probe = openInputFile(candidate);
         if (probe.good()) {
             return candidate;
         }
@@ -169,6 +171,10 @@ int main(int argc, char** argv) {
     stconsole::ensureUtf8();
     stlog::initFromEnvironment();
 
+    // 统一把命令行参数转成 UTF-8（Windows 上 argv 是 ANSI 代码页/GBK），
+    // 这样 `--file D:\测试\图像.png` 这类中文路径才能正确打开。
+    const std::vector<std::string> args = sttext::utf8CommandLine(argc, argv);
+
     std::string host = "127.0.0.1";
     std::uint16_t port = 9000;
     std::string keyPath;
@@ -184,20 +190,20 @@ int main(int argc, char** argv) {
     bool askViewLog = false;
 
     int positional = 0;
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg = argv[i];
-        if (arg == "--key" && i + 1 < argc) {
-            keyPath = argv[++i];
-        } else if (arg == "--file" && i + 1 < argc) {
-            files.push_back(argv[++i]);
-        } else if (arg == "--image" && i + 1 < argc) {
-            images.push_back(argv[++i]);
-        } else if (arg == "--data-dir" && i + 1 < argc) {
-            dataDir = argv[++i];
-        } else if (arg == "--id" && i + 1 < argc) {
-            identityOverride = argv[++i];
-        } else if (arg == "--policy" && i + 1 < argc) {
-            policyPath = argv[++i];
+    for (std::size_t i = 1; i < args.size(); ++i) {
+        const std::string arg = args[i];
+        if (arg == "--key" && i + 1 < args.size()) {
+            keyPath = args[++i];
+        } else if (arg == "--file" && i + 1 < args.size()) {
+            files.push_back(args[++i]);
+        } else if (arg == "--image" && i + 1 < args.size()) {
+            images.push_back(args[++i]);
+        } else if (arg == "--data-dir" && i + 1 < args.size()) {
+            dataDir = args[++i];
+        } else if (arg == "--id" && i + 1 < args.size()) {
+            identityOverride = args[++i];
+        } else if (arg == "--policy" && i + 1 < args.size()) {
+            policyPath = args[++i];
         } else if (arg == "--whoami") {
             askWhoAmI = true;
         } else if (arg == "--view-log") {
