@@ -1,0 +1,75 @@
+# ============================================================================
+#  自动化测试（Linux + Windows）
+#
+#  目的：让每次提交都自动证明"密码学与协议测试通过"，而不仅仅是"能编译"。
+#    * Linux 任务：g++ + CMake，构建全部库、命令行程序与测试，跑 ctest；
+#    * Windows 任务：MSYS2/MinGW-w64，同样构建并跑 ctest（验证 Windows 侧一致性）。
+#
+#  说明：这里**不装 Qt5**（st_ui 会被 CMake 自动跳过），所以两条任务都很快；
+#        界面相关的自动化由 .github/workflows/windows-ui.yml 负责打包验证。
+# ============================================================================
+name: 测试（Linux + Windows）
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'apps/**'
+      - 'tests/**'
+      - 'tools/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/**'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux-tests:
+    name: Linux：构建 + ctest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装工具链
+        run: sudo apt-get update && sudo apt-get install -y g++ cmake ninja-build
+
+      - name: 显示编译器版本
+        run: g++ --version | head -1 && cmake --version | head -1
+
+      - name: 配置（Release）
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: 构建
+        run: cmake --build build -j4
+
+      - name: 全量测试（ctest）
+        run: ctest --test-dir build --output-on-failure
+
+  windows-tests:
+    name: Windows：构建 + ctest
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 MSYS2 工具链
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+
+      - name: 配置（Release）
+        run: cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: 构建
+        run: cmake --build build-win -j4
+
+      - name: 全量测试（ctest）
+        run: ctest --test-dir build-win --output-on-failure
