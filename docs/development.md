@@ -75,6 +75,7 @@ cd /home/securityTransfer/build && ./alice 127.0.0.1 9000
 ```text
 ./bob    [port] [--key <配置文件>] [--mock] [--placeholder] [--quiet] [--out-dir <目录>]
                  [--id <本端身份>] [--peer <对端身份>] [--policy <策略>] [--access-log <日志>]
+                 [--once] [--max-sessions <N>] [--help]
 ./alice  [host] [port] [--key <配置文件>] [--mock] [--placeholder] [--quiet]
                  [--file <路径>]... [--image <路径>]... [--data-dir <目录>]
                  [--id <身份>] [--policy <策略>] [--whoami] [--view-log]
@@ -85,6 +86,11 @@ cd /home/securityTransfer/build && ./alice 127.0.0.1 9000
 * `--placeholder`：仍用真实 AES-CTR，但把 MAC 换成占位实现，
   用于演示"密码算法与协议层解耦"（会打印警告）；
 * `--quiet`：关闭握手每一步的日志（演示时更干净）。
+* `--once`（Bob）：只服务一个客户端就退出——脚本 / 测试用它把服务端收尾；
+  不加时 Bob 是**常驻服务**：可连续服务多个客户端，`Ctrl+C` 结束。
+  单个客户端握手失败不会再让服务退出（"连上就断"的洪泛也不会），
+  整次握手有总时长上限，慢速客户端会被掐断（见 `Part2_transfer.md` §27）。
+* `--max-sessions <N>`（Bob）：服务 N 次会话后退出（0 = 不限）。
 * `--file <路径>` / `--image <路径>`（Alice）：在 4 条文本消息之后把文件 / 图像安全传给 Bob，
   可重复使用；相对路径会自动到 `--data-dir`（默认 `experiment_data/`）里查找；
 * `--out-dir <目录>`（Bob）：接收到的文件 / 图像保存目录，默认 `experiment_data/received`。

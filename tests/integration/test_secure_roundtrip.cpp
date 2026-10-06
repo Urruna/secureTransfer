@@ -8,6 +8,7 @@
 
 #include "secure_test_util.h"
 #include "test_util.h"
+#include "raw_client.h"
 
 #include <future>
 #include <thread>
@@ -44,6 +45,38 @@ struct ServerResult {
     ProtocolStats stats;
     std::string error;
 };
+
+/// 服务端侧处理"一轮会话"：收一条消息 → 回 ACK → 等 CLOSE → 回 BYE。
+/// 用于验证"同一 SecureSession 连续服务多个客户端"。
+bool serveOneRound(SecureSession& session, const std::string& expected, std::string& error) {
+    MessageType type = MessageType::kError;
+    Bytes body;
+    if (!session.receiveMessage(type, body)) {
+        error = session.lastError();
+        return false;
+    }
+    if (bytesToString(body) != expected) {
+        error = "收到意外的消息: " + bytesToString(body);
+        return false;
+    }
+    if (!session.sendMessage(MessageType::kData, stringToBytes("ACK-" + expected))) {
+        error = session.lastError();
+        return false;
+    }
+    if (!session.receiveMessage(type, body)) {
+        error = session.lastError();
+        return false;
+    }
+    if (type != MessageType::kClose) {
+        error = "期望 CLOSE，收到 " + std::string(messageTypeToString(type));
+        return false;
+    }
+    if (!session.sendMessage(MessageType::kData, stringToBytes("BYE"))) {
+        error = session.lastError();
+        return false;
+    }
+    return true;
+}
 
 void runServer(SessionConfig config, ServerResult* result) {
     AesCryptoProvider crypto(nullptr);
@@ -302,6 +335,115 @@ ST_TEST_CASE("secure_roundtrip: acceptOneClient(超时) 可被打断，且监听
 
     client.close();
     server.close();
+}
+
+ST_TEST_CASE("secure_roundtrip: closeConnection() 后同一 SecureSession 可继续服务下一个客户端") {
+    // 对应"服务端常驻化"：一次会话结束后只关连接、保留监听，下一个客户端还能连进来。
+    const Key128 key = testutil::testMasterKey(0x3C);
+
+    std::promise<std::uint16_t> portPromise;
+    auto portFuture = portPromise.get_future();
+    SessionConfig serverConfig = testutil::makeServerConfig(0, key);
+    serverConfig.onListening = [&portPromise](std::uint16_t port) {
+        portPromise.set_value(port);
+    };
+
+    AesCryptoProvider serverCrypto(nullptr);
+    SecureSession server(serverCrypto, serverConfig);
+
+    bool firstOk = false;
+    bool secondOk = false;
+    std::string serverError;
+    testutil::ThreadGuard serverThread(std::thread([&]() {
+        if (!server.acceptOneClient(5000)) {
+            serverError = server.lastError();
+            return;
+        }
+        firstOk = serveOneRound(server, "first", serverError);
+        server.closeConnection();  // 关键：只关连接，保留监听
+        if (!firstOk) {
+            return;
+        }
+        if (!server.acceptOneClient(5000)) {
+            serverError = server.lastError();
+            return;
+        }
+        secondOk = serveOneRound(server, "second", serverError);
+        server.closeConnection();
+    }));
+
+    const std::uint16_t port = portFuture.get();
+    auto runClient = [&](const std::string& text) {
+        AesCryptoProvider clientCrypto(nullptr);
+        SecureSession client(clientCrypto, testutil::makeClientConfig(port, key));
+        ST_CHECK(client.connectToServer());
+        ST_CHECK(client.sendMessage(MessageType::kData, stringToBytes(text)));
+        MessageType type = MessageType::kError;
+        Bytes body;
+        ST_CHECK(client.receiveMessage(type, body));
+        ST_CHECK_EQ(bytesToString(body), std::string("ACK-") + text);
+        ST_CHECK(client.sendMessage(MessageType::kClose, Bytes{}));
+        ST_CHECK(client.receiveMessage(type, body));
+        ST_CHECK_EQ(bytesToString(body), std::string("BYE"));
+        client.close();
+    };
+
+    runClient("first");
+    runClient("second");
+    serverThread.join();
+
+    ST_CHECK(firstOk);
+    ST_CHECK(secondOk);
+    ST_CHECK(serverError.empty());
+}
+
+ST_TEST_CASE("secure_roundtrip: 慢速握手会被整包读取期限掐断（不再长期占用服务端）") {
+    // 攻击模型：连上之后先发一个"看起来合法"的包头，然后每次只发一点字节，
+    // 让单个 recv 之间总有数据——旧实现下 readExact() 会被无限拖住。
+    const Key128 key = testutil::testMasterKey(0x2A);
+
+    std::promise<std::uint16_t> portPromise;
+    auto portFuture = portPromise.get_future();
+    SessionConfig serverConfig = testutil::makeServerConfig(0, key);
+    serverConfig.handshakeTimeoutMs = 8000;  // 单次 recv 的宽限期故意设得很长
+    serverConfig.handshakeDeadlineMs = 700;  // 但整次握手只给 700 ms
+    serverConfig.onListening = [&portPromise](std::uint16_t port) {
+        portPromise.set_value(port);
+    };
+
+    AesCryptoProvider serverCrypto(nullptr);
+    SecureSession server(serverCrypto, serverConfig);
+
+    bool serverOk = true;
+    long long elapsedMs = 0;
+    testutil::ThreadGuard serverThread(std::thread([&]() {
+        const auto start = std::chrono::steady_clock::now();
+        serverOk = server.acceptOneClient(5000);
+        elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - start)
+                        .count();
+    }));
+
+    const std::uint16_t port = portFuture.get();
+
+    testutil::RawClient slow;
+    ST_CHECK(slow.connectTo(port));
+    // Frame 长度 = 57（刚好是一个空 Body 的 Packet），包头合法，但 Body 慢慢发
+    ST_CHECK(slow.sendBytes(std::vector<uint8_t>{0x00, 0x00, 0x00, 0x39}));
+    for (int i = 0; i < 40; ++i) {
+        if (!slow.sendBytes(std::vector<uint8_t>{0x41})) {
+            break;  // 服务端已经断开
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    }
+    slow.closeNow();
+    serverThread.join();
+
+    ST_CHECK(!serverOk);         // 握手不应该成功
+    ST_CHECK(elapsedMs < 3000);  // 而且在总时限附近就被掐断（不是等满 8 s）
+    const std::string error = server.lastError();
+    ST_CHECK(error.find("期限") != std::string::npos || error.find("超时") != std::string::npos);
+    ST_CHECK(server.state() != SessionState::kEstablished);
 }
 
 int main() {

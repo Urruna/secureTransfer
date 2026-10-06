@@ -66,7 +66,7 @@ echo
 echo "=================== 3. Alice / Bob 安全通信演示 ==================="
 PORT=$(( (RANDOM % 2000) + 9000 ))
 cd "${BUILD_DIR}"
-./bob "${PORT}" --quiet >/tmp/st_bob_demo.log 2>&1 &
+./bob "${PORT}" --once --quiet >/tmp/st_bob_demo.log 2>&1 &
 BOB_PID=$!
 sleep 1
 ./alice 127.0.0.1 "${PORT}" --quiet >/tmp/st_alice_demo.log 2>&1
@@ -107,7 +107,7 @@ if [ -d "${DATA_DIR}" ] && [ -f "${DATA_DIR}/test_file_1MB.bin" ]; then
     rm -rf "${OUT_DIR}"
     mkdir -p "${OUT_DIR}"
     cd "${BUILD_DIR}"
-    ./bob "${FILE_PORT}" --out-dir "${OUT_DIR}" --quiet >/tmp/st_ft_bob.log 2>&1 &
+./bob "${FILE_PORT}" --out-dir "${OUT_DIR}" --once --quiet >/tmp/st_ft_bob.log 2>&1 &
     FT_BOB_PID=$!
     sleep 1
     ./alice 127.0.0.1 "${FILE_PORT}" --quiet \
@@ -155,7 +155,7 @@ if [ -f "${AC_POLICY}" ]; then
     cd "${BUILD_DIR}"
     # 场景 1：管理员（alice）——全部允许，并可查看审计日志
     ./bob "${AC_PORT_ADMIN}" --peer alice --out-dir "${OUT_DIR}" --access-log "${ACCESS_LOG}" \
-        --quiet >/tmp/st_ac_bob1.log 2>&1 &
+        --once --quiet >/tmp/st_ac_bob1.log 2>&1 &
     AC_BOB1=$!
     sleep 1
     ./alice 127.0.0.1 "${AC_PORT_ADMIN}" --id alice --quiet --whoami --view-log \
@@ -165,7 +165,7 @@ if [ -f "${AC_POLICY}" ]; then
 
     # 场景 2：访客（mallory）——短消息允许，文件与查看日志被拒绝，会话继续
     ./bob "${AC_PORT_GUEST}" --peer mallory --out-dir "${OUT_DIR}" --access-log "${ACCESS_LOG}" \
-        --quiet >/tmp/st_ac_bob2.log 2>&1 &
+        --once --quiet >/tmp/st_ac_bob2.log 2>&1 &
     AC_BOB2=$!
     sleep 1
     ./alice 127.0.0.1 "${AC_PORT_GUEST}" --id mallory --quiet --whoami --view-log \

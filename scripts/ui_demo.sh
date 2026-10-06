@@ -71,7 +71,7 @@ sleep 2
 
 echo
 echo "==================== 场景 2：图形界面作为客户端 ===================="
-(cd "${BUILD_DIR}" && ./bob 9500 --peer alice --id bob --quiet \
+    (cd "${BUILD_DIR}" && ./bob 9500 --peer alice --id bob --once --quiet \
     --out-dir "${OUT_DIR}" --access-log "${ACCESS_LOG}" >/tmp/st_ui_cli_bob.log 2>&1 &)
 sleep 1
 nohup "${BUILD_DIR}/st_ui" --client --auto --port 9500 --id alice --peer bob \

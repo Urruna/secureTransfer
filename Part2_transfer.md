@@ -2711,3 +2711,86 @@ leftScroll  viewport=424 x 674   innerWidget=538 x 735   hScroll=0   innerMinWid
 
 修复后实测：`innerWidget` 宽度 **等于** `viewport` 宽度（507/507、347/347、411/411），
 左列不再有内容被裁；Windows 与 Linux 回归均为 0 错误 0 警告、`ctest` 16/16。
+
+---
+
+# 27. 第十二轮：CI 自动测试 + 服务端常驻化与抗拒绝服务（2026-10-06）
+
+这一轮针对上一节"项目最大改进点"的两条：**验证自动化**与**服务端健壮性**。
+
+## 27.1 起因：一个实测出来的真实拒绝服务面
+
+上一轮结束时做过一次实验（`docs/review` 口述结论）：只用一个"连上就断开"的空连接，
+就能让命令行 Bob **直接退出**：
+
+```text
+=== 场景 A：坏客户端连上就断开（不发任何数据）===
+    坏连接后 Bob 还在运行吗: 否（已退出！）
+Bob 输出：[ERROR] [Bob] 握手失败: 握手 HELLO 接收失败: recv() 返回 0 ...
+```
+
+根因是 `apps/bob/main.cpp` 为**单次演示**写的结构：只 `accept()` 一次，握手失败就
+`return EXIT_FAILURE`。对课程演示够用，但作为"工具"是不能用的。
+
+## 27.2 CI：每次提交都自动跑测试
+
+原来只有 `.github/workflows/windows-ui.yml`（编译 + 打包，不跑测试）。
+新增 **`.github/workflows/tests.yml`**：
+
+| 任务 | 内容 |
+| --- | --- |
+| `linux-tests`（ubuntu-latest） | 安装 g++/cmake/ninja → 构建 → `ctest` → **端到端演示**（起 Bob、跑 Alice、发 4 条消息 + 64 KB 文件、`cmp` 逐字节比对） |
+| `windows-tests`（windows-latest + MSYS2） | 安装 gcc/cmake/ninja → 构建 → `ctest` |
+
+两条任务都**不装 Qt5 / OpenSSL**（`st_ui` 与性能对比工具会被 CMake 自动跳过），所以很快；
+界面打包仍由 `windows-ui.yml` 负责。触发条件：push 到 main（源码/测试/CMake 变更）、PR、手动。
+
+## 27.3 服务端常驻化 + 抗拒绝服务
+
+### 改动一览
+
+| 层 | 改动 |
+| --- | --- |
+| `Network` | 新增 `closeConnection()`（只关连接、保留监听）；新增 `setReadDeadlineMs()`（**整包读取期限**）；`applyTimeout` 记录当前配置超时；`listen()` 的 backlog 由 **1 → 8** |
+| `SecureSession` | 新增 `closeConnection()`（会话状态复位、保留监听）；新增 `SessionConfig::handshakeDeadlineMs`（默认 15 s，**整次握手总时限**）；握手失败时只关连接、不再关监听（`state_` 回到 `kDisconnected`）；握手期间把剩余时限下发给 `Network`，数据阶段取消 |
+| `apps/bob` | 主循环改成**常驻服务**：分片等待客户端（200 ms，可响应 Ctrl+C）→ 处理会话 → `closeConnection()` → 继续等；新增 `--once`、`--max-sessions N`、`--help`；`SIGINT/SIGTERM` 优雅退出；失败限流（"真正占用过服务端的失败"才暂停 200 ms） |
+| 脚本 | `verify_in_vm.sh` / `capture_eve.sh` / `lan_test.sh`（netns）/ `ui_demo.sh` / `capture_eve_windows.py` 里"起 Bob 后等它退出"的地方统一加 `--once`；`lan_test.sh --server` 与 `run_bob.bat` 保持常驻 |
+
+### 为什么需要"整包读取期限"
+
+`SO_RCVTIMEO` 只限制"两次 recv 之间没有数据"的等待。攻击者只要**每个字节间隔都比超时短**
+（例如每 3 秒发 1 字节），`readExact()` 里的循环就一直有数据可读，**握手总时限也拦不住**，
+服务端会被无限拖住。所以 `SecureSession` 在握手阶段把"剩余总时限"通过
+`Network::setReadDeadlineMs()` 下发，`readExact()` 每轮 recv 前把超时收紧到剩余期限，
+期限一到就返回 `TIMEOUT`。
+
+## 27.4 新增测试
+
+| 测试 | 断言 |
+| --- | --- |
+| `closeConnection() 后同一 SecureSession 可继续服务下一个客户端` | 第一次会话正常结束 → `closeConnection()` → 第二个客户端仍能完成握手与收发（监听没被关掉） |
+| `慢速握手会被整包读取期限掐断` | 假客户端先发合法包头、再每 150 ms 只发 1 字节 → 服务端在 **< 3 s** 内失败（而单次 recv 超时设的是 8 s），错误信息含"期限/超时" |
+
+## 27.5 实测结果（Windows，2026-10-06）
+
+```text
+构建：0 错误 0 警告；ctest：16/16 通过（test_secure_roundtrip 现在 6 个用例）
+
+抗 DoS 实测（常驻 Bob）：
+  连发 20 个"连上就断"的空连接 → 全部被接受，Bob 仍然存活 ✅
+  紧接着连续 3 次正常会话         → 全部成功（退出码 0）✅
+  Bob 日志末尾：handshake(ok/fail)=3/20，服务继续监听 ✅
+
+--once 兼容性：只服务一个客户端后退出，退出码 0 ✅（脚本/测试仍按老方式工作）
+```
+
+对照组（改动前）：单个空连接就让 Bob 退出 ❌。
+
+## 27.6 保留的取舍
+
+1. 服务端是**顺序服务**（一次一个会话）：简单、可预测；`backlog=8` 用来排队等待的客户端。
+   要真正并发可以再引入"每连接一个线程"，但会牵动 `AccessController`（审计日志）等共享状态的加锁，
+   属于更大的改动，本轮不做。
+2. 限流是"软"的：只对**占用过服务端**的失败暂停 200 ms。
+   连上就断的洪泛本身几乎不耗时，直接继续服务；真正的资源占用已被"握手总时限 + 整包读取期限"锁死。
+3. `handshakeDeadlineMs` 默认 15 s：足够正常握手（本地实测 < 50 ms），也不会让慢速攻击者占用太久。

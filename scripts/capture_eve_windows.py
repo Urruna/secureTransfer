@@ -148,7 +148,7 @@ def start_guest_bob(args) -> bool:
         f"rm -rf {args.guest_project}/experiment_data/received_eve; "
         f"mkdir -p {args.guest_project}/experiment_data/received_eve; "
         f"nohup ./bob {args.port} --out-dir {args.guest_project}/experiment_data/received_eve "
-        f"--quiet > /home/{args.guest_user}/eve_bob.log 2>&1 & sleep 1; echo started"
+        f"--once --quiet > /home/{args.guest_user}/eve_bob.log 2>&1 & sleep 1; echo started"
     )
     result = run([
         str(args.vmrun), "-T", "ws",
@@ -168,7 +168,7 @@ def start_local_bob(args):
     exe = binary_dir(args) / "bob.exe"
     log(f"[步骤] 在本机启动 Bob：{exe}")
     return subprocess.Popen(
-        [str(exe), str(args.port), "--quiet", "--out-dir", str(out_dir)],
+        [str(exe), str(args.port), "--quiet", "--once", "--out-dir", str(out_dir)],
         cwd=str(binary_dir(args)),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.STDOUT,

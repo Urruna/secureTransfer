@@ -203,6 +203,10 @@ cd /home/securityTransfer/build && ./bob 9000
 cd /home/securityTransfer/build && ./alice 127.0.0.1 9000
 ```
 
+> `bob` 默认是**常驻服务**：可以连续服务多个客户端，用 `Ctrl+C` 结束；
+> 单个客户端握手失败（例如别人连上就断）不会再让服务退出，整次握手还有总时长上限。
+> 只想服务一个客户端就退出（脚本/测试用）加 `--once`；服务 N 次后退出用 `--max-sessions N`。
+
 窃听演示：
 
 ```bash

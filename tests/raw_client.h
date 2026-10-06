@@ -40,6 +40,14 @@ inline constexpr SocketHandle kInvalidHandle = -1;
 inline void closeHandle(SocketHandle handle) { ::close(handle); }
 #endif
 
+// 与 Network 一样带上 MSG_NOSIGNAL：对端已经断开时，Linux 上普通 send() 会触发
+// SIGPIPE 直接把测试进程杀掉（Windows 没有这个信号，所以只在 Linux 暴露出来）。
+#if defined(MSG_NOSIGNAL)
+constexpr int kSendFlags = MSG_NOSIGNAL;
+#else
+constexpr int kSendFlags = 0;
+#endif
+
 /// 绕过 Frame 封装、直接写 socket 的测试辅助类。
 class RawClient {
 public:
@@ -82,7 +90,7 @@ public:
             return false;
         }
         const int sent = ::send(handle_, reinterpret_cast<const char*>(data.data()),
-                                    static_cast<int>(data.size()), 0);
+                                    static_cast<int>(data.size()), kSendFlags);
         return sent >= 0 && static_cast<std::size_t>(sent) == data.size();
     }
 

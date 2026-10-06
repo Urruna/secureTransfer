@@ -192,7 +192,7 @@ run_netns() {
 
     echo "[5/6] 运行 Alice / Bob（安全握手 + 4 条加密消息 + CLOSE）..."
     # 用 timeout 防止对端未启动时无限阻塞（Bob 的 accept() 会一直等）
-    sudo_run timeout 60 ip netns exec "${NS_BOB}" "${BUILD_DIR}/bob" "${PORT}" --quiet \
+sudo_run timeout 60 ip netns exec "${NS_BOB}" "${BUILD_DIR}/bob" "${PORT}" --once --quiet \
         >/tmp/st_lan_bob.log 2>&1 &
     BOB_PID=$!
     sleep 1

@@ -46,6 +46,19 @@ jobs:
       - name: 全量测试（ctest）
         run: ctest --test-dir build --output-on-failure
 
+      - name: 端到端演示（真实 TCP：4 条消息 + 64 KB 文件）
+        run: |
+          cd build
+          ./bob 9300 --once --quiet > /tmp/bob.log 2>&1 &
+          sleep 1
+          ./alice 127.0.0.1 9300 --quiet \
+              --file ../experiment_data/test_file_64KB.bin > /tmp/alice.log 2>&1
+          wait
+          grep -q "全部安全传输成功" /tmp/alice.log
+          grep -q "FILE OK test_file_64KB.bin" /tmp/alice.log
+          cmp ../experiment_data/test_file_64KB.bin ../experiment_data/received/test_file_64KB.bin
+          echo "端到端演示：通过（接收文件与源文件逐字节一致）"
+
   windows-tests:
     name: Windows：构建 + ctest
     runs-on: windows-latest

@@ -145,6 +145,27 @@ bool SecureSession::sendRawWireForTesting(const Bytes& wire) {
 }
 
 bool SecureSession::recvPacket(Packet& packet, const char* stage) {
+    // 握手总时限：单个 recv 有超时，但"对端每次都刚好发一点"可以无限拖时间。
+    // 这里再加一道总时限，防止一个客户端长时间占住服务端（慢速握手/资源占用）。
+    if (state_ != SessionState::kEstablished && config_.handshakeDeadlineMs > 0) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - handshakeStart_)
+                                 .count();
+        const long remaining = static_cast<long>(config_.handshakeDeadlineMs) -
+                               static_cast<long>(elapsed);
+        if (remaining <= 0) {
+            return failHandshake("握手总时长超过 " +
+                                 std::to_string(config_.handshakeDeadlineMs) +
+                                 " ms，已中止（疑似慢速握手占用服务端）");
+        }
+        // 让"读完当前这一个包"也受剩余时限约束：
+        // 否则对端只要每隔几秒发一个字节，就能把服务端一直占住。
+        network_.setReadDeadlineMs(static_cast<int>(remaining));
+    } else {
+        // 数据阶段：按 ioTimeoutMs 走，不设整包期限
+        network_.setReadDeadlineMs(0);
+    }
+
     Frame frame;
     if (!network_.receiveFrame(frame)) {
         return fail(std::string(stage) + " 接收失败: " + network_.lastError());
@@ -188,6 +209,7 @@ bool SecureSession::sendHandshakePacket(MessageType type, const Nonce& nonce,
 
 bool SecureSession::handshakeAsClient() {
     state_ = SessionState::kAuthenticating;
+    handshakeStart_ = std::chrono::steady_clock::now();  // 握手总时限的起点
 
     nonceA_ = random_.array<16>();
     sessionId_ = random_.array<8>();
@@ -315,6 +337,7 @@ bool SecureSession::handshakeAsClient() {
 
 bool SecureSession::handshakeAsServer() {
     state_ = SessionState::kAuthenticating;
+    handshakeStart_ = std::chrono::steady_clock::now();  // 握手总时限的起点
 
     // ① HELLO：学习 SessionId / Alice_ID / Nonce_A
     Packet hello;
@@ -536,8 +559,10 @@ bool SecureSession::acceptOneClient(int clientWaitMs) {
 
     if (!handshakeAsServer()) {
         ++stats_.handshakesFailed;
-        network_.close();
-        state_ = SessionState::kFailed;
+        // 常驻服务：只断开这个客户端，**保留监听 socket**，让下一个客户端还能连进来
+        network_.closeConnection();
+        sessionIdKnown_ = false;
+        state_ = SessionState::kDisconnected;
         return false;
     }
     if (!deriveSessionKeys()) {
@@ -670,6 +695,17 @@ void SecureSession::close() {
     if (state_ != SessionState::kFailed) {
         state_ = SessionState::kDisconnected;
     }
+}
+
+void SecureSession::closeConnection() {
+    network_.closeConnection();
+    if (state_ != SessionState::kFailed) {
+        state_ = SessionState::kDisconnected;
+    }
+    // 清掉"本次会话"的状态，避免下一个客户端复用旧的 SessionId / 序号
+    sessionIdKnown_ = false;
+    replayGuard_.reset();
+    sendSequence_ = 0;
 }
 
 // ---------------------------------------------------------------------------

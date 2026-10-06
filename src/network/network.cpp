@@ -45,8 +45,11 @@ namespace {
 
 const char* const kLogModule = "Network";
 
-/// listen() 的 backlog。演示阶段只需要一个客户端。
-constexpr int kListenBacklog = 1;
+/// listen() 的 backlog。
+/// 服务端是"顺序服务"（一次处理一个会话），但需要给"正在等待的客户端"留队列：
+/// backlog 太小时，连续接入的客户端会被系统直接拒绝（RST）——
+/// 之前设成 1 是为单次演示，常驻服务改成 8（含攻击者刷连接的情况）。
+constexpr int kListenBacklog = 8;
 
 // ---------------------------------------------------------------------------
 //  平台差异集中在这一段：Windows 用 Winsock2，Linux 用 POSIX socket。
@@ -508,6 +511,20 @@ bool Network::readExact(uint8_t* buffer, std::size_t length) {
                               ? INT_MAX
                               : static_cast<int>(remaining);
 
+        // 设置了"整包读取期限"时，把本次 recv 的超时收紧到剩余期限，
+        // 这样对端"每次只发一点点字节"也无法把服务端无限拖住。
+        if (hasReadDeadline_) {
+            const int effective = effectiveReceiveTimeoutMs();
+            if (effective < 0) {
+                return fail(Result::TIMEOUT,
+                            "recv() 超过整包读取期限，已接收 " + std::to_string(totalRead) + "/" +
+                                std::to_string(length) + " 字节");
+            }
+            if (effective != receiveTimeoutMs_ && !applyTimeout(true, effective)) {
+                return false;  // applyTimeout() 已经写好 lastError_
+            }
+        }
+
         const ssize_t received = ::recv(handle, reinterpret_cast<char*>(buffer + totalRead), chunk, 0);
 
         if (received > 0) {
@@ -593,11 +610,40 @@ bool Network::applyTimeout(bool forReceive, int timeoutMs) {
 }
 
 bool Network::setReceiveTimeoutMs(int timeoutMs) {
-    return applyTimeout(true, timeoutMs);
+    if (!applyTimeout(true, timeoutMs)) {
+        return false;
+    }
+    receiveTimeoutMs_ = timeoutMs;
+    return true;
 }
 
 bool Network::setSendTimeoutMs(int timeoutMs) {
     return applyTimeout(false, timeoutMs);
+}
+
+void Network::setReadDeadlineMs(int ms) {
+    if (ms > 0) {
+        hasReadDeadline_ = true;
+        readDeadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    } else {
+        hasReadDeadline_ = false;
+    }
+}
+
+int Network::effectiveReceiveTimeoutMs() const {
+    int timeout = receiveTimeoutMs_;
+    if (hasReadDeadline_) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   readDeadline_ - std::chrono::steady_clock::now())
+                                   .count();
+        if (remaining <= 0) {
+            return -1;  // 期限已到
+        }
+        if (timeout <= 0 || remaining < timeout) {
+            timeout = static_cast<int>(remaining);
+        }
+    }
+    return timeout;
 }
 
 namespace {
@@ -690,4 +736,14 @@ void Network::close() {
     }
 
     boundPort_ = 0;
+}
+
+void Network::closeConnection() {
+    if (connectionSocket_ != kInvalidSocket) {
+        // 先 shutdown 再 close，让对端立即感知到连接结束（与 close() 中的处理一致）
+        ::shutdown(toHandle(connectionSocket_), kShutdownBoth);
+        closeSocket(toHandle(connectionSocket_));
+        connectionSocket_ = kInvalidSocket;
+        ST_LOG_INFO(kLogModule, "connection closed");
+    }
 }

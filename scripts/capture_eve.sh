@@ -32,7 +32,7 @@ sudo tcpdump -U -i lo -X "port ${PORT}" -w "${CAPTURE}" >/dev/null 2>&1 &
 sleep 2
 
 echo "[2/4] 启动 Bob ..."
-(cd "${BUILD_DIR}" && ./bob "${PORT}" --quiet >/tmp/eve_bob_${PORT}.log 2>&1) &
+(cd "${BUILD_DIR}" && ./bob "${PORT}" --once --quiet >/tmp/eve_bob_${PORT}.log 2>&1) &
 BOB_PID=$!
 sleep 1
 

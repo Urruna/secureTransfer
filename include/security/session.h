@@ -23,6 +23,7 @@
 #define SECURETRANSFER_SECURITY_SESSION_H
 
 #include <cstdint>
+#include <chrono>
 #include <functional>
 #include <string>
 
@@ -55,6 +56,7 @@ struct SessionConfig {
     Key128 masterKey{};                  ///< 长期认证密钥 K_master
     bool hasMasterKey = false;
     int handshakeTimeoutMs = 5000;       ///< 握手阶段超时
+    int handshakeDeadlineMs = 15000;     ///< 整个握手的总时限（0 = 不限）：防"慢速握手"长期占用服务端
     int ioTimeoutMs = 10000;             ///< 数据阶段超时
     bool logHandshake = true;            ///< 是否打印握手每一步
 
@@ -148,6 +150,10 @@ public:
     /// 主动结束会话：发送 kClose（尽力而为）并关闭连接。
     void close();
 
+    /// 只结束**本次连接**、保留监听 socket（服务端常驻用）：
+    /// 会话状态回到"未连接"，下一个客户端可以继续连进来。
+    void closeConnection();
+
     // ------------------------------ 诊断接口 ------------------------------
     SessionState state() const { return state_; }
     bool isEstablished() const { return state_ == SessionState::kEstablished; }
@@ -220,6 +226,7 @@ private:
     Bytes prefixS2C_;
     std::uint64_t sendSequence_ = 0;
     bool acceptTimedOut_ = false;
+    std::chrono::steady_clock::time_point handshakeStart_{};  ///< 握手开始时刻（用于总时限）
     ReplayGuard replayGuard_;
     ProtocolStats stats_;
     std::string lastError_;

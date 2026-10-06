@@ -14,13 +14,24 @@
 //        --out-dir：接收到的文件 / 图像保存目录（默认 experiment_data/received）
 //        --peer  ：本次会话接受的**对端身份**（握手时会校验，防止冒充；
 //                  演示访问控制时可用它切换成 eve / mallory 等身份）
+//        --once  ：只服务一个客户端就退出（脚本 / 测试用；失败也退出）
+//
+//  默认是**常驻服务**：可以连续服务多个客户端，Ctrl+C 结束；
+//  单个客户端握手失败不会再让服务退出（带连续失败退避），
+//  整次握手还有总时长上限（SessionConfig::handshakeDeadlineMs），防止慢速握手占用服务端。
+//
 //        默认 port = 9000，密钥文件按 configs/keys.conf 等候选路径查找。
 // ============================================================================
 
 #include <cstdlib>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <csignal>
 #include <iomanip>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "application/file_transfer.h"
@@ -145,117 +156,46 @@ bool parseCommand(const Bytes& body, std::string& command) {
     return true;
 }
 
+/// 常驻服务的停止标志：Ctrl+C / SIGTERM 只置位，主循环里安全退出。
+std::atomic<bool> g_stopRequested{false};
+
+void handleStopSignal(int) {
+    g_stopRequested.store(true);
+}
+
+/// 命令行帮助（--help）。默认是常驻服务，可以连续服务多个客户端。
+void printUsage() {
+    std::cout << R"(用法：./bob [端口] [选项]
+
+  端口                     监听端口（默认 9000）
+  --key <文件>             密钥配置（默认 configs/keys.conf）
+  --policy <文件>          访问控制策略
+  --access-log <文件>      审计日志
+  --out-dir <目录>         接收文件 / 图像的保存目录
+  --id <身份>              本端身份（默认 bob）
+  --peer <身份>            期望的对端身份（默认 alice）
+  --quiet                  减少输出
+  --once                   只服务一个客户端就退出（脚本 / 测试用）
+  --max-sessions <N>       服务 N 次会话后退出（0 = 不限）
+  --mock / --placeholder   演示用：换成占位算法（不具备密码学强度）
+  --help                   显示本帮助
+
+默认行为：**常驻服务**，可连续服务多个客户端，Ctrl+C 结束。
+默认端口是 9000。
+)";
+}
+
 }  // namespace
 
-int main(int argc, char** argv) {
-    stconsole::ensureUtf8();
-    stlog::initFromEnvironment();
+namespace {
 
-    // 统一把命令行参数转成 UTF-8：Windows 上 argv 是 ANSI 代码页（GBK），
-    // 直接用会让 `--out-dir D:\测试\收到的文件` 这类中文路径失效。
-    const std::vector<std::string> args = sttext::utf8CommandLine(argc, argv);
-
-    std::uint16_t port = 9000;
-    std::string keyPath;
-    bool useMock = false;
-    bool usePlaceholderMac = false;
-    bool quiet = false;
-    std::string outDir = "experiment_data/received";
-    std::string policyPath;
-    std::string accessLogPath = "experiment_data/access_log.txt";
-    std::string identityOverride;
-    std::string peerOverride;
-
-    for (std::size_t i = 1; i < args.size(); ++i) {
-        const std::string arg = args[i];
-        if (arg == "--key" && i + 1 < args.size()) {
-            keyPath = args[++i];
-        } else if (arg == "--out-dir" && i + 1 < args.size()) {
-            outDir = args[++i];
-        } else if (arg == "--policy" && i + 1 < args.size()) {
-            policyPath = args[++i];
-        } else if (arg == "--access-log" && i + 1 < args.size()) {
-            accessLogPath = args[++i];
-        } else if (arg == "--id" && i + 1 < args.size()) {
-            identityOverride = args[++i];
-        } else if (arg == "--peer" && i + 1 < args.size()) {
-            peerOverride = args[++i];
-        } else if (arg == "--mock") {
-            useMock = true;
-        } else if (arg == "--placeholder") {
-            usePlaceholderMac = true;
-        } else if (arg == "--quiet") {
-            quiet = true;
-        } else if (!arg.empty() && arg[0] != '-' && !parsePort(arg, port)) {
-            std::cerr << "[ERROR] 非法端口: " << arg << std::endl;
-            return EXIT_FAILURE;
-        }
-    }
-
-    KeyStoreConfig keys;
-    if (!loadKeyStore(keyPath, keys)) {
-        return EXIT_FAILURE;
-    }
-
-    // 默认：真实 AES-CTR + 第一部分的 CMAC（RFC 4493）
-    PlaceholderMacEngine placeholderMac;
-    AesCryptoProvider aesProvider(usePlaceholderMac ? static_cast<MacEngine*>(&placeholderMac)
-                                                   : nullptr);
-    MockCryptoProvider mockProvider;
-    CryptoProvider& crypto = useMock ? static_cast<CryptoProvider&>(mockProvider)
-                                     : static_cast<CryptoProvider&>(aesProvider);
-
-    SessionConfig config;
-    config.localId = identityOverride.empty() ? keys.bobId : identityOverride;
-    config.peerId = peerOverride.empty() ? keys.aliceId : peerOverride;
-    config.port = port;
-    config.masterKey = keys.masterKey;
-    config.hasMasterKey = true;
-    config.logHandshake = !quiet;
-
-    std::cout << "==================== Bob (服务端) ====================" << std::endl;
-    std::cout << "身份          : " << config.localId << "（期望对端: " << config.peerId << "）"
-              << std::endl;
-    std::cout << "K_master 指纹 : " << KeyStore::keyFingerprint(config.masterKey)
-              << "（仅指纹，不打印密钥内容）" << std::endl;
-    std::cout << "密码算法      : " << crypto.name() << std::endl;
-    std::cout << "完整性算法    : " << aesProvider.macEngineName()
-              << (crypto.macIsCryptographicallySecure() ? "（密码学强度：达标）"
-                                                        : "（⚠ 占位实现，不达标）")
-              << std::endl;
-    std::cout << "=====================================================" << std::endl;
-
-    // ---------------- 访问控制策略（服务端权威判定）----------------
-    acl::AccessController accessController;
-    std::string policyUsed;
-    if (!loadPolicy(policyPath, accessController, policyUsed)) {
-        return EXIT_FAILURE;
-    }
-    const std::string logDir = accessLogPath.substr(0, accessLogPath.find_last_of('/'));
-    if (!logDir.empty() && logDir != accessLogPath) {
-        (void)ensureDirectory(logDir);
-    }
-    if (!outDir.empty()) {
-        (void)ensureDirectory(outDir);
-    }
-    std::string logError;
-    if (!accessController.setAuditLogFile(accessLogPath, logError)) {
-        std::cerr << "[WARN] " << logError << "（审计只记录在内存中）" << std::endl;
-    }
-    std::cout << "访问策略      : " << policyUsed << "（裁决方：服务端）" << std::endl;
-    std::cout << "本端角色      : " << accessController.roleOf(config.localId) << " ["
-              << accessController.permissionsOf(config.localId).toString() << "]" << std::endl;
-    std::cout << "对端角色      : " << accessController.roleOf(config.peerId) << " ["
-              << accessController.permissionsOf(config.peerId).toString() << "]" << std::endl;
-    std::cout << "审计日志      : " << accessLogPath << std::endl;
-    std::cout << "-----------------------------------------------------" << std::endl;
-
-    SecureSession session(crypto, config);
-    if (!session.acceptOneClient()) {
-        std::cerr << "[ERROR] [Bob] 握手失败: " << session.lastError() << std::endl;
-        return EXIT_FAILURE;
-    }
-
+/// 处理一次**已经握手完成**的会话。
+/// 返回 true  = 对端正常发送 CLOSE，会话正常结束；
+/// 返回 false = 本次会话出错（常驻服务可以继续服务下一个客户端）。
+bool serveOneSession(SecureSession& session,
+                     acl::AccessController& accessController,
+                     const SessionConfig& config,
+                     const std::string& outDir) {
     std::cout << "安全会话已建立。SessionId = " << toHex(session.sessionId()) << std::endl;
     std::cout << "NonceA = " << toHex(session.nonceA()) << std::endl;
     std::cout << "NonceB = " << toHex(session.nonceB()) << std::endl;
@@ -272,7 +212,7 @@ int main(int argc, char** argv) {
             std::cerr << "[ERROR] [Bob] 接收失败: " << session.lastError() << std::endl;
             session.close();
             std::cout << "统计: " << session.stats().summary() << std::endl;
-            return EXIT_FAILURE;
+            return false;
         }
 
         if (type == MessageType::kClose) {
@@ -406,7 +346,7 @@ int main(int argc, char** argv) {
             if (!session.sendMessage(MessageType::kData, stringToBytes(ack))) {
                 std::cerr << "[ERROR] [Bob] 回复失败: " << session.lastError() << std::endl;
                 session.close();
-                return EXIT_FAILURE;
+                return false;
             }
             continue;
         }
@@ -431,7 +371,7 @@ int main(int argc, char** argv) {
             if (!session.sendMessage(MessageType::kData, stringToBytes(ack))) {
                 std::cerr << "[ERROR] [Bob] 回复失败: " << session.lastError() << std::endl;
                 session.close();
-                return EXIT_FAILURE;
+                return false;
             }
         } else {
             std::cout << "  （这是对端的回复型消息，不再自动回复）" << std::endl;
@@ -444,6 +384,193 @@ int main(int argc, char** argv) {
               << accessController.deniedCount() << " 次）。" << std::endl;
     std::cout << "统计: " << session.stats().summary() << std::endl;
     session.close();
+    ST_LOG_INFO("Bob", "安全通信流程结束");
+    return true;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    stconsole::ensureUtf8();
+    stlog::initFromEnvironment();
+
+    // 统一把命令行参数转成 UTF-8：Windows 上 argv 是 ANSI 代码页（GBK），
+    // 直接用会让 `--out-dir D:\测试\收到的文件` 这类中文路径失效。
+    const std::vector<std::string> args = sttext::utf8CommandLine(argc, argv);
+
+    std::uint16_t port = 9000;
+    std::string keyPath;
+    bool useMock = false;
+    bool usePlaceholderMac = false;
+    bool quiet = false;
+    std::string outDir = "experiment_data/received";
+    std::string policyPath;
+    std::string accessLogPath = "experiment_data/access_log.txt";
+    std::string identityOverride;
+    std::string peerOverride;
+    bool serveOnce = false;        // --once：只服务一个客户端就退出（脚本/测试用）
+    long maxSessions = 0;          // --max-sessions N：服务 N 次后退出（0 = 不限）
+
+    for (std::size_t i = 1; i < args.size(); ++i) {
+        const std::string arg = args[i];
+        if (arg == "--key" && i + 1 < args.size()) {
+            keyPath = args[++i];
+        } else if (arg == "--out-dir" && i + 1 < args.size()) {
+            outDir = args[++i];
+        } else if (arg == "--policy" && i + 1 < args.size()) {
+            policyPath = args[++i];
+        } else if (arg == "--access-log" && i + 1 < args.size()) {
+            accessLogPath = args[++i];
+        } else if (arg == "--id" && i + 1 < args.size()) {
+            identityOverride = args[++i];
+        } else if (arg == "--peer" && i + 1 < args.size()) {
+            peerOverride = args[++i];
+        } else if (arg == "--once") {
+            serveOnce = true;
+        } else if (arg == "--max-sessions" && i + 1 < args.size()) {
+            maxSessions = std::strtol(args[++i].c_str(), nullptr, 10);
+            if (maxSessions < 0) {
+                maxSessions = 0;
+            }
+        } else if (arg == "--help" || arg == "-h") {
+            printUsage();
+            return EXIT_SUCCESS;
+        } else if (arg == "--mock") {
+            useMock = true;
+        } else if (arg == "--placeholder") {
+            usePlaceholderMac = true;
+        } else if (arg == "--quiet") {
+            quiet = true;
+        } else if (!arg.empty() && arg[0] != '-' && !parsePort(arg, port)) {
+            std::cerr << "[ERROR] 非法端口: " << arg << std::endl;
+            return EXIT_FAILURE;
+        }
+    }
+
+    KeyStoreConfig keys;
+    if (!loadKeyStore(keyPath, keys)) {
+        return EXIT_FAILURE;
+    }
+
+    // 默认：真实 AES-CTR + 第一部分的 CMAC（RFC 4493）
+    PlaceholderMacEngine placeholderMac;
+    AesCryptoProvider aesProvider(usePlaceholderMac ? static_cast<MacEngine*>(&placeholderMac)
+                                                   : nullptr);
+    MockCryptoProvider mockProvider;
+    CryptoProvider& crypto = useMock ? static_cast<CryptoProvider&>(mockProvider)
+                                     : static_cast<CryptoProvider&>(aesProvider);
+
+    SessionConfig config;
+    config.localId = identityOverride.empty() ? keys.bobId : identityOverride;
+    config.peerId = peerOverride.empty() ? keys.aliceId : peerOverride;
+    config.port = port;
+    config.masterKey = keys.masterKey;
+    config.hasMasterKey = true;
+    config.logHandshake = !quiet;
+
+    std::cout << "==================== Bob (服务端) ====================" << std::endl;
+    std::cout << "身份          : " << config.localId << "（期望对端: " << config.peerId << "）"
+              << std::endl;
+    std::cout << "K_master 指纹 : " << KeyStore::keyFingerprint(config.masterKey)
+              << "（仅指纹，不打印密钥内容）" << std::endl;
+    std::cout << "密码算法      : " << crypto.name() << std::endl;
+    std::cout << "完整性算法    : " << aesProvider.macEngineName()
+              << (crypto.macIsCryptographicallySecure() ? "（密码学强度：达标）"
+                                                        : "（⚠ 占位实现，不达标）")
+              << std::endl;
+    std::cout << "=====================================================" << std::endl;
+
+    // ---------------- 访问控制策略（服务端权威判定）----------------
+    acl::AccessController accessController;
+    std::string policyUsed;
+    if (!loadPolicy(policyPath, accessController, policyUsed)) {
+        return EXIT_FAILURE;
+    }
+    const std::string logDir = accessLogPath.substr(0, accessLogPath.find_last_of('/'));
+    if (!logDir.empty() && logDir != accessLogPath) {
+        (void)ensureDirectory(logDir);
+    }
+    if (!outDir.empty()) {
+        (void)ensureDirectory(outDir);
+    }
+    std::string logError;
+    if (!accessController.setAuditLogFile(accessLogPath, logError)) {
+        std::cerr << "[WARN] " << logError << "（审计只记录在内存中）" << std::endl;
+    }
+    std::cout << "访问策略      : " << policyUsed << "（裁决方：服务端）" << std::endl;
+    std::cout << "本端角色      : " << accessController.roleOf(config.localId) << " ["
+              << accessController.permissionsOf(config.localId).toString() << "]" << std::endl;
+    std::cout << "对端角色      : " << accessController.roleOf(config.peerId) << " ["
+              << accessController.permissionsOf(config.peerId).toString() << "]" << std::endl;
+    std::cout << "审计日志      : " << accessLogPath << std::endl;
+    std::cout << "-----------------------------------------------------" << std::endl;
+
+    // Ctrl+C / SIGTERM：只置停止标志，由主循环安全退出（常驻服务需要能优雅结束）
+    std::signal(SIGINT, handleStopSignal);
+#ifdef SIGTERM
+    std::signal(SIGTERM, handleStopSignal);
+#endif
+
+    SecureSession session(crypto, config);
+    // 一次会话的处理体已搬进 serveOneSession()（见文件上方）；
+    // 下面这段循环负责：等待客户端 → 处理本次会话 → 关连接（保留监听）→ 继续等待。
+    constexpr int kAcceptSliceMs = 200;  // 分片等待：既能及时响应 Ctrl+C，也不空转
+    int servedSessions = 0;
+    int failedHandshakes = 0;
+    int consecutiveFailures = 0;
+    std::cout << "服务模式      : "
+              << (serveOnce ? "单次会话（--once）"
+                            : "常驻：可连续服务多个客户端（Ctrl+C 结束）")
+              << std::endl;
+    std::cout << "-----------------------------------------------------" << std::endl;
+
+    while (!g_stopRequested) {
+        const auto attemptStart = std::chrono::steady_clock::now();
+        if (!session.acceptOneClient(kAcceptSliceMs)) {
+            if (session.lastAcceptTimedOut()) {
+                continue;  // 这段时间没有客户端接入：继续等
+            }
+            // 握手失败（对端连上就断、认证失败、握手超时……）不再让服务退出
+            ++failedHandshakes;
+            ++consecutiveFailures;
+            std::cerr << "[WARN] [Bob] 本次连接建立/握手失败（服务继续运行）: "
+                      << session.lastError() << "（连续失败 " << consecutiveFailures << " 次）"
+                      << std::endl;
+            if (serveOnce) {
+                return EXIT_FAILURE;  // --once：保持"失败即退出"的旧行为
+            }
+            // 限流策略："只有真正占用过服务端"的失败才短暂退避。
+            // "连上就断"的洪泛几乎不耗时（accept 后立刻读到 EOF），直接继续服务即可；
+            // 而"慢速握手"这类会占用服务端的失败（已被总时限掐断）则让它慢下来。
+            const auto attemptMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - attemptStart)
+                                       .count();
+            if (attemptMs >= 500) {
+                std::cout << "（本次失败占用了 " << attemptMs << " ms，暂停 200 ms 再继续）"
+                          << std::endl;
+                for (int slept = 0; slept < 200 && !g_stopRequested; slept += 50) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+            }
+            continue;
+        }
+
+        consecutiveFailures = 0;
+        ++servedSessions;
+        if (!serveOneSession(session, accessController, config, outDir)) {
+            std::cerr << "[WARN] [Bob] 本次会话异常结束（服务继续运行）" << std::endl;
+        }
+        session.closeConnection();  // 只关连接、保留监听，准备服务下一个客户端
+
+        if (serveOnce ||
+            (maxSessions > 0 && static_cast<long>(servedSessions) >= maxSessions)) {
+            break;
+        }
+    }
+
+    session.close();
+    std::cout << "服务结束：完成会话 " << servedSessions << " 次，握手失败 " << failedHandshakes
+              << " 次。" << std::endl;
     ST_LOG_INFO("Bob", "安全通信流程结束");
     return EXIT_SUCCESS;
 }

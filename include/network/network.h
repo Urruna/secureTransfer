@@ -18,6 +18,7 @@
 #define SECURETRANSFER_NETWORK_NETWORK_H
 
 #include <cstdint>
+#include <chrono>
 #include <string>
 
 #include "network/frame.h"
@@ -80,6 +81,11 @@ public:
     /// 关闭所有 socket。可以重复调用；不会修改 lastResult()/lastError()。
     void close();
 
+    /// 只关闭**已建立的连接**，保留监听 socket。
+    /// 用途：服务端在一次会话结束后继续等待下一个客户端（常驻服务）。
+    /// 可以重复调用；不会修改 lastResult()/lastError()。
+    void closeConnection();
+
     // ------------------------------------------------------------------
     //  扩展 / 诊断接口
     //  以下方法不属于项目组约定的核心接口，只是为 demo、测试以及后续
@@ -120,6 +126,14 @@ public:
     /// 与 waitReadable() 一样：超时不是错误，不改 lastResult()/lastError()。
     WaitResult waitAcceptable(int timeoutMs);
 
+    /// 为接下来的 receiveFrame() 设置"整包读取期限"（毫秒，0 = 取消）。
+    ///
+    /// 为什么要它：SO_RCVTIMEO 只限制"单次 recv 之间没有数据"的等待，
+    /// 对端只要每次都刚好发一点字节，readExact() 就能被无限拖住。
+    /// 设置期限后，readExact() 会在每次 recv 前把超时收紧到"剩余期限"，
+    /// 因此"慢速发送"无法突破这个总期限（握手阶段用来防资源占用）。
+    void setReadDeadlineMs(int ms);
+
     Result lastResult() const;            ///< 最近一次操作的结果
     const std::string& lastError() const; ///< 最近一次失败的详细描述
 
@@ -134,6 +148,9 @@ private:
     bool writeAll(const uint8_t* data, std::size_t length);
     bool readExact(uint8_t* buffer, std::size_t length);
     bool applyTimeout(bool forReceive, int timeoutMs);
+    /// 本轮 recv 实际应该用的超时：取"配置的超时"与"剩余读取期限"的较小值。
+    /// 返回 -1 表示期限已到。
+    int effectiveReceiveTimeoutMs() const;
 
     void resetError();
     bool fail(Result result, const std::string& message);
@@ -144,6 +161,10 @@ private:
 
     Result lastResult_;    ///< 最近一次操作的结果
     std::string lastError_; ///< 最近一次失败的原因
+
+    int receiveTimeoutMs_ = 0;              ///< 最近一次 setReceiveTimeoutMs() 配置的值（0 = 不超时）
+    bool hasReadDeadline_ = false;          ///< 是否设置了整包读取期限
+    std::chrono::steady_clock::time_point readDeadline_{};
 };
 
 #endif  // SECURETRANSFER_NETWORK_NETWORK_H
