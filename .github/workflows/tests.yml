@@ -48,18 +48,22 @@ jobs:
 
       - name: 端到端演示（真实 TCP：4 条消息 + 64 KB 文件）
         run: |
+          show_logs() {
+            echo "--- alice.log ---"; tail -20 /tmp/alice.log 2>/dev/null
+            echo "--- bob.log ---";   tail -20 /tmp/bob.log 2>/dev/null
+          }
+          # 仓库里只有 keys.conf.example（真实密钥文件被 .gitignore 排除），
+          # 这里按模板生成一份供演示使用（模板里的 master_key 是课程实验用测试值）。
+          cp -f configs/keys.conf.example configs/keys.conf
           cd build
           OUT="$PWD/../experiment_data/received_ci"
           rm -rf "$OUT" && mkdir -p "$OUT"
           ./bob 9300 --once --quiet --out-dir "$OUT" > /tmp/bob.log 2>&1 &
           sleep 1
           ./alice 127.0.0.1 9300 --quiet \
-              --file ../experiment_data/test_file_64KB.bin > /tmp/alice.log 2>&1
+              --file ../experiment_data/test_file_64KB.bin > /tmp/alice.log 2>&1 \
+              || { show_logs; exit 1; }
           wait
-          show_logs() {
-            echo "--- alice.log ---"; tail -20 /tmp/alice.log
-            echo "--- bob.log ---";   tail -20 /tmp/bob.log
-          }
           grep -q "全部安全传输成功" /tmp/alice.log || { show_logs; exit 1; }
           grep -q "FILE OK test_file_64KB.bin" /tmp/alice.log || { show_logs; exit 1; }
           cmp ../experiment_data/test_file_64KB.bin "$OUT/test_file_64KB.bin" \
