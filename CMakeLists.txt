@@ -134,22 +134,101 @@ target_link_libraries(cmac_benchmark PRIVATE st_crypto)
 
 # ---------------------------------------------------------------------------
 # 与库实现的性能对比工具（课程要求 5）
-#   ⚠ 只用于对比实验：该目标链接 OpenSSL，但系统本体（alice/bob/st_*）不链接，
+#   ⚠ 只用于对比实验：这些目标链接密码库，但系统本体（alice/bob/st_*）不链接，
 #     密码算法仍然全部是第一部分自己实现的（课程要求 4）。
-#   未安装 libssl-dev 时自动跳过，不影响其它目标的构建。
+#   后端都是"可选"的：某个库找不到就自动跳过该后端，不影响其它目标构建。
+#
+#   两个可执行文件：
+#     * crypto_benchmark      —— 用发行包里的库（默认可能启用硬件加速）；
+#     * crypto_benchmark_soft —— "纯软件对纯软件"对照，链接自建的、禁用 AES-NI 的
+#                                Mbed TLS / Botan（需要 -DST_BENCH_SOFT_ROOT=<前缀目录>）。
 # ---------------------------------------------------------------------------
 find_package(OpenSSL QUIET)
+find_package(PkgConfig QUIET)
+
+set(ST_BENCH_SOURCES
+        tools/crypto_benchmark.cpp
+        tools/bench_backend_self.cpp)
+set(ST_BENCH_DEFS "")
+set(ST_BENCH_LIBS "")
+
 if(OpenSSL_FOUND)
-    add_executable(crypto_benchmark tools/crypto_benchmark.cpp)
-    target_link_libraries(crypto_benchmark PRIVATE st_crypto OpenSSL::Crypto)
+    list(APPEND ST_BENCH_SOURCES tools/bench_backend_openssl.cpp)
+    list(APPEND ST_BENCH_DEFS ST_BENCH_WITH_OPENSSL)
+    list(APPEND ST_BENCH_LIBS OpenSSL::Crypto)
+    message(STATUS "已启用 crypto_benchmark 的 OpenSSL 后端（OpenSSL ${OPENSSL_VERSION}）")
+endif()
+
+if(PkgConfig_FOUND)
+    pkg_check_modules(MBEDTLS QUIET IMPORTED_TARGET mbedtls)
+    pkg_check_modules(MBEDCRYPTO QUIET IMPORTED_TARGET mbedcrypto)
+    pkg_check_modules(BOTAN QUIET IMPORTED_TARGET botan-3)
+endif()
+
+if(MBEDTLS_FOUND)
+    list(APPEND ST_BENCH_SOURCES tools/bench_backend_mbedtls.cpp)
+    list(APPEND ST_BENCH_DEFS ST_BENCH_WITH_MBEDTLS)
+    list(APPEND ST_BENCH_LIBS PkgConfig::MBEDTLS)
+    if(MBEDCRYPTO_FOUND)
+        list(APPEND ST_BENCH_LIBS PkgConfig::MBEDCRYPTO)
+    endif()
+    message(STATUS "已启用 crypto_benchmark 的 Mbed TLS 后端（${MBEDTLS_VERSION}）")
+endif()
+
+if(BOTAN_FOUND)
+    list(APPEND ST_BENCH_SOURCES tools/bench_backend_botan.cpp)
+    list(APPEND ST_BENCH_DEFS ST_BENCH_WITH_BOTAN)
+    list(APPEND ST_BENCH_LIBS PkgConfig::BOTAN)
+    message(STATUS "已启用 crypto_benchmark 的 Botan 后端（${BOTAN_VERSION}）")
+endif()
+
+if(OpenSSL_FOUND OR MBEDTLS_FOUND OR BOTAN_FOUND)
+    add_executable(crypto_benchmark ${ST_BENCH_SOURCES})
+    target_link_libraries(crypto_benchmark PRIVATE st_crypto ${ST_BENCH_LIBS})
+    target_compile_definitions(crypto_benchmark PRIVATE ${ST_BENCH_DEFS})
+    # Botan 3 要求 C++20：只给这一个目标开，其余代码仍是 C++17。
+    if(BOTAN_FOUND)
+        target_compile_features(crypto_benchmark PRIVATE cxx_std_20)
+    endif()
     # 该工具刻意使用 OpenSSL 的经典 CMAC_* 接口（与虚拟机里的 OpenSSL 1.1.1 行为一致）；
-    # 在 OpenSSL 3.x 上这些接口被标记为“已弃用”，这里只对这一个目标关闭该提示。
+    # 在 OpenSSL 3.x 上这些接口被标记为“已弃用”，这里只对这些目标关闭该提示。
     if(NOT MSVC)
         target_compile_options(crypto_benchmark PRIVATE -Wno-deprecated-declarations)
     endif()
-    message(STATUS "已启用 crypto_benchmark（OpenSSL ${OPENSSL_VERSION}）")
+    message(STATUS "已生成 crypto_benchmark")
 else()
     message(STATUS "未找到 OpenSSL，跳过 crypto_benchmark（仅影响性能对比工具）")
+endif()
+
+# ---- 纯软件对照（方案 b）：链接自建的、禁用 AES-NI 的 Mbed TLS / Botan ----
+set(ST_BENCH_SOFT_ROOT "" CACHE PATH
+    "无 AES-NI 版 Mbed TLS / Botan 的前缀目录，例如 D:/AppGallery/dev-tools/libs")
+if(ST_BENCH_SOFT_ROOT AND (OpenSSL_FOUND OR MBEDTLS_FOUND OR BOTAN_FOUND))
+    set(ST_BENCH_SOFT_SOURCES
+            tools/crypto_benchmark.cpp
+            tools/bench_backend_self.cpp
+            tools/bench_backend_openssl.cpp
+            tools/bench_backend_mbedtls.cpp
+            tools/bench_backend_botan.cpp)
+    add_executable(crypto_benchmark_soft ${ST_BENCH_SOFT_SOURCES})
+    target_link_libraries(crypto_benchmark_soft PRIVATE
+            st_crypto
+            OpenSSL::Crypto
+            "${ST_BENCH_SOFT_ROOT}/mbedtls-noaesni/lib/libmbedcrypto_noaesni.a"
+            "${ST_BENCH_SOFT_ROOT}/botan-noaesni/lib/botan-3.lib"
+            ws2_32)
+    target_include_directories(crypto_benchmark_soft PRIVATE
+            "${ST_BENCH_SOFT_ROOT}/mbedtls-noaesni/include"
+            "${ST_BENCH_SOFT_ROOT}/botan-noaesni/include/botan-3")
+    target_compile_definitions(crypto_benchmark_soft PRIVATE
+            ST_BENCH_WITH_OPENSSL ST_BENCH_WITH_MBEDTLS ST_BENCH_WITH_BOTAN ST_BENCH_BOTAN_SOFT
+            # 让后端 TU 与"无 AES-NI"那份库使用同一个配置头（否则结构体/特性会不一致）
+            MBEDTLS_CONFIG_FILE="mbedtls/mbedtls_config_noaesni.h")
+    target_compile_features(crypto_benchmark_soft PRIVATE cxx_std_20)
+    if(NOT MSVC)
+        target_compile_options(crypto_benchmark_soft PRIVATE -Wno-deprecated-declarations)
+    endif()
+    message(STATUS "已生成 crypto_benchmark_soft（纯软件对照，前缀：${ST_BENCH_SOFT_ROOT}）")
 endif()
 
 # ---------------------------------------------------------------------------

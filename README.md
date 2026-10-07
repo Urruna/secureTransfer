@@ -23,7 +23,8 @@
 | Windows 主机（MSYS2 MinGW-w64，g++ 16.2.0） | 0 错误 0 警告 | `ctest` **16/16** | 4 条测试消息 + 4 个文件/图像逐字节一致 | 跨系统双机（Windows Alice ↔ Ubuntu Bob，双向）；性能对比（OpenSSL 3.6.5）；Qt 界面（Qt 5.15.19）已编译并跑通一次会话 |
 
 篡改 / 伪造 / 重放 / 窃听四项安全测试在两端全部通过；
-密码算法与 OpenSSL 完成 1 KB ~ 100 MB 的性能对比（含"禁用 AES-NI 的纯软件对比"）。
+密码算法与 **OpenSSL / Mbed TLS / Botan** 三个库完成 1 KB ~ 100 MB 的性能对比，
+并且每个库都给出"默认（可能启用硬件加速）"与"纯软件"两组数据 + 一张倍率汇总表。
 
 **想了解什么，看哪个文件：**
 
@@ -97,7 +98,9 @@ Alice 和 Bob 只能通过不安全的网络通信，Eve 可以窃听、篡改�
 * **图形界面（Qt5）**：连接与身份配置、会话状态、短消息、文件与图像传输（进度条 +
   校验结果）、访问控制查询、Eve 攻击演示按钮、运行日志；**界面不实现任何密码学逻辑**，
   只调用已有模块（见 `docs/ui.md`）；
-* 与库实现的性能对比：AES-CTR / CMAC × 1 KB ~ 100 MB，含禁用 AES-NI 的纯软件对比（`docs/performance.md`）；
+* 与库实现的性能对比：AES-CTR / CMAC × 1 KB ~ 100 MB，对比 **OpenSSL / Mbed TLS / Botan**
+  三个库，每个库都有"默认"与"纯软件（禁用 AES-NI）"两组数据，并附汇总表
+  （`docs/performance.md` §9；一键复现 `scripts/run_benchmarks.sh`）；
 * 局域网双机通信：两台独立主机（独立 IP 栈）经以太网链路完成握手与传输，附抓包证据（`docs/lan_test.md`）。
 
 **状态与明确限制**
@@ -107,7 +110,7 @@ Alice 和 Bob 只能通过不安全的网络通信，Eve 可以窃听、篡改�
 | 要求的 1~7 项功能           | ✅ 已实现并实测                                    | 见`docs/requirements.md` 的逐条对照                                         |
 | AES-128 / AES-CTR           | ✅ 已集成（第一部分交付，`src/crypto/aes.cpp`）  | FIPS-197 + NIST SP 800-38A 向量验证                                           |
 | CMAC                        | ✅ 已集成（第一部分交付，`src/crypto/cmac.cpp`） | RFC 4493 的 4 条标准向量验证                                                  |
-| 性能对比 benchmark          | ✅ 已完成（`tools/crypto_benchmark`）            | 与 OpenSSL 对比，覆盖 1 KB~100 MB：`docs/performance.md`                    |
+| 性能对比 benchmark          | ✅ 已完成（`tools/crypto_benchmark`）            | 与 OpenSSL / Mbed TLS / Botan 对比，覆盖 1 KB~100 MB，含纯软件对照与汇总表：`docs/performance.md` §9 |
 | 局域网 / 双机测试           | ✅ 已完成（`scripts/lan_test.sh`）               | 两台独立主机 + 抓包证据；真机双机命令见`docs/lan_test.md`                   |
 | 文件 / 图像传输             | ✅ 已完成（`src/application/`）                  | 分块 + 单包两条路径，含整文件 CRC32 校验与实验数据：`docs/file_transfer.md` |
 | 访问控制（Role/Permission） | ✅ 已完成（`src/security/access_control.cpp`）   | 策略可配置、服务端权威判定、审计日志：`docs/access_control.md`              |
@@ -157,7 +160,9 @@ securityTransfer/
 │   └── deploy_to_home.sh     # 部署到 /home/securityTransfer
 ├── tools/
 │   ├── cmac_benchmark.cpp    # CMAC 性能测试（第一部分成果的加工程序）
-│   └── crypto_benchmark.cpp  # 与 OpenSSL 的性能对比（要求 5；⚠ 只有它链接密码库）
+│   ├── crypto_benchmark.cpp  # 多库性能对比的 driver（要求 5；⚠ 只有它链接密码库）
+│   ├── bench_backend_*.cpp   # 各库后端：self / openssl / mbedtls / botan
+│   └── bench_merge.py        # 把多次运行的 CSV 合并成汇总表
 ├── reference/
 │   ├── part1-aes-cmac/       # 第一部分交付原件存档（Windows 工程，不参与构建）
 │   └── aes-c-legacy/         # 更早的 C 版 AES 实现（已被 C++ 版取代，留档）
@@ -170,7 +175,7 @@ securityTransfer/
     ├── interfaces.md         # 对外接口说明
     ├── development.md        # 编译、运行、扩展指南
     ├── test_report.md        # 实测结果（含攻击测试数据）
-    ├── performance.md        # 性能对比报告（自实现 vs OpenSSL，要求 5）
+├── performance.md        # 性能对比报告（自实现 vs OpenSSL / Mbed TLS / Botan，要求 5）
     ├── lan_test.md           # 局域网双机测试报告（要求 6）
     ├── file_transfer.md      # 文件与图像传输说明 + 实测数据（要求 9）
     ├── access_control.md     # 访问控制：策略、判定流程、实测数据（要求 7）

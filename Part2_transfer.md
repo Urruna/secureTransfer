@@ -2794,3 +2794,96 @@ Bob 输出：[ERROR] [Bob] 握手失败: 握手 HELLO 接收失败: recv() 返�
 2. 限流是"软"的：只对**占用过服务端**的失败暂停 200 ms。
    连上就断的洪泛本身几乎不耗时，直接继续服务；真正的资源占用已被"握手总时限 + 整包读取期限"锁死。
 3. `handshakeDeadlineMs` 默认 15 s：足够正常握手（本地实测 < 50 ms），也不会让慢速攻击者占用太久。
+
+---
+
+# 28. 第十三轮：性能对比扩展到 Mbed TLS 与 Botan（2026-10-07）
+
+## 28.1 目标
+
+课程要求 5 是"与库文件**或别人的代码实现**做全面对比"。上一轮只有 OpenSSL 一个库，
+本轮按用户决策补齐：
+
+* **B 方案**：同时加入 **Mbed TLS**（嵌入式/小体积代表）与 **Botan**（现代 C++ 代表）；
+* **纯软件对照（方案 b）**：不只对比"默认配置"，还要给出"纯软件对纯软件"的数据；
+* **汇总表**：把多次运行合并成一张倍率总表；
+* **只做 Windows**：环境是 MSYS2/MinGW-w64（不做 Ubuntu 侧）。
+
+## 28.2 工具重构：从"两个实现"变成"多后端"
+
+原先 `tools/crypto_benchmark.cpp` 是单文件、只认识 OpenSSL。现在拆成：
+
+| 文件 | 作用 |
+| --- | --- |
+| `tools/bench_backend.h` | 后端接口：一个 `Backend` = 名字 + 加速说明 + `aesCtr()` + `cmac()` |
+| `tools/bench_backend_self.cpp` | 自实现（第一部分成果） |
+| `tools/bench_backend_openssl.cpp` | OpenSSL（`EVP_aes_128_ctr` + `CMAC_CTX`） |
+| `tools/bench_backend_mbedtls.cpp` | Mbed TLS（`mbedtls_aes_crypt_ctr` + `mbedtls_cipher_cmac`） |
+| `tools/bench_backend_botan.cpp` | Botan（`AES-128/CTR-BE` + `CMAC(AES-128)`；需 C++20） |
+| `tools/crypto_benchmark.cpp` | driver：计时、正确性交叉验证、分后端表、**汇总表**、CSV 导出 |
+| `tools/bench_merge.py` | 把多次运行的 CSV 合并成汇总表（Markdown） |
+| `scripts/run_benchmarks.sh` | 一键：跑默认组 + 纯软件组 + 生成汇总表 |
+
+要求 4 仍然守住：这些库只被"对比工具"链接，系统本体一行都没碰。
+
+## 28.3 纯软件对照（方案 b）怎么做出来的
+
+三个库关闭硬件加速的方式不同（这也是本轮最有信息量的部分）：
+
+| 库 | 硬件支持的形式 | 关闭方式 |
+| --- | --- | --- |
+| OpenSSL | 运行时按 CPUID 选择 | 环境变量 `OPENSSL_ia32cap=~0x200000200000000`（同一份二进制即可） |
+| Mbed TLS | 编译期宏 `MBEDTLS_AESNI_C` | 用自定义配置头（注释掉该宏）重新编译 `library/*.c` → `libmbedcrypto_noaesni.a` |
+| Botan | 构建时启用的模块 `aes_ni` / `aes_vaes` | 源码构建：`--minimized-build --enable-modules=aes,cmac,ctr,modes --disable-modules=aes_ni,aes_vaes --cc=gcc --build-targets=static` |
+
+两个自建库放在 `D:\AppGallery\dev-tools\libs\{mbedtls-noaesni,botan-noaesni}`；
+CMake 通过 `-DST_BENCH_SOFT_ROOT=...` 生成第二个可执行文件 `crypto_benchmark_soft.exe`，
+与默认的 `crypto_benchmark.exe` **同一份源码**，只有链接的库不同 → 口径一致。
+
+## 28.4 实测结果（Windows / i5-1340P / MinGW-w64 g++ 16.2）
+
+**正确性交叉验证（比性能之前先做）**：自实现、OpenSSL 3.6.5、Mbed TLS 3.6.7、Botan 3.13.0
+四方的 AES-CTR 密文与 CMAC **逐字节一致** ✅ —— 说明 CTR 端序（Botan 用 `CTR-BE`）与
+CMAC 参数都对上了，性能数字可比。
+
+**AES-128-CTR 1 MB（吞吐率 MB/s，括号为相对自实现倍率）**：
+
+```text
+自实现          135.1
+OpenSSL 硬件   5926.3（43.9x）    OpenSSL 软件    648.4（4.8x）
+Mbed TLS 硬件  1212.1（9.0x）     Mbed TLS 软件   400.4（3.0x）
+Botan 硬件     4784.3（35.4x）    Botan 软件      153.3（1.13x）
+```
+
+**CMAC 1 MB**：
+
+```text
+自实现          140.8
+OpenSSL 硬件   2040.8（14.5x）    OpenSSL 软件    403.9（2.9x）
+Mbed TLS 硬件  1120.3（8.0x）     Mbed TLS 软件   330.6（2.4x）
+Botan 硬件      971.1（6.9x）     Botan 软件       71.1（0.52x）
+```
+
+## 28.5 结论（写进报告的三条）
+
+1. **数量级差距来自硬件加速**：同一个库关掉 AES-NI 后，OpenSSL 从 ~5900 掉到 ~650 MB/s
+   （≈9 倍），Mbed TLS 从 ~1200 掉到 ~400（≈3 倍）。
+2. **"是库"不等于"快"**：都用 AES-NI 时，OpenSSL/Botan 能到 3900~5900 MB/s，
+   而 Mbed TLS 只有 ~1200 —— 因为它按"一次一块"调用 AES-NI，没有做多块并行/流水线。
+   这条对比最有说服力：**瓶颈在实现方式，不在"是不是第三方库"**。
+3. **我们的实现处在"合格的通用软件实现"水平**：纯软件对纯软件时，
+   比 OpenSSL 慢 4.8~5.0 倍、比 Mbed TLS 慢 2.9~3.0 倍，但**与 Botan 的通用软件路径持平**
+   （AES-CTR 1.11~1.14x；CMAC 上我们比它快约 2 倍）。差距来自查表/多块并行/汇编等工程优化。
+
+## 28.6 产物与复现
+
+* 原始数据（已入库）：`experiment_data/benchmarks/{bench_hw.log,bench_hw.csv,bench_sw.log,bench_sw.csv,summary.md}`
+* 报告章节：`docs/performance.md` §9（环境、方法、汇总表、纯软件怎么来的、复现命令）
+* 一条命令复现：`bash scripts/run_benchmarks.sh [--max-mb N]`
+
+## 28.7 保留的取舍
+
+1. **Botan 在 Windows 是 3.13，要求 C++20**：只给对比工具这一个 target 开了 C++20，其余代码仍是 C++17；
+2. 纯软件版的 Mbed TLS/Botan 是**我们自己构建**的（`-O3`），发行包的具体编译参数未知，
+   报告中已标注构建方式；比较"库的软件路径"时两者优化级别一致（都是 -O3）；
+3. 本轮只做 Windows（用户决策）；Linux 侧仍保留第 8 节的历史数据，口径与本节一致。
