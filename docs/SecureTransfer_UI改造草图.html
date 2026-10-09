@@ -1,0 +1,101 @@
+<style>
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);}
+.cd{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:8px 10px;}
+.hd{font-size:12px;font-weight:500;margin:0 0 6px;}
+.br{border:0.5px solid var(--color-border-tertiary);border-radius:6px;padding:4px 9px;font-size:11px;color:var(--color-text-secondary);}
+.bp{border-radius:6px;padding:4px 9px;font-size:11px;background:var(--color-background-info);color:var(--color-text-info);}
+.mc{background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:6px 8px;}
+.mc b{display:block;font-size:15px;font-weight:500;margin-top:2px;}
+.dt{width:7px;height:7px;border-radius:50%;display:inline-block;flex:none;}
+</style>
+<h2 class="sr-only">改造后 SecureTransfer 界面草图：顶部工具栏、左中右三栏、底部状态栏</h2>
+<div style="border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);overflow:hidden;background:var(--color-background-primary);font-size:12px;color:var(--color-text-primary);">
+
+<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 14px;background:var(--color-background-secondary);border-bottom:0.5px solid var(--color-border-tertiary);">
+<span style="font-size:14px;font-weight:500;">SecureTransfer</span>
+<span style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-text-success);"><span class="dt" style="background:var(--color-text-success);"></span>安全会话已建立</span>
+</div>
+
+<div style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:0.5px solid var(--color-border-tertiary);flex-wrap:wrap;">
+<span class="bp">连接</span><span class="br">断开</span>
+<span style="width:1px;height:16px;background:var(--color-border-tertiary);"></span>
+<span class="br">发送文件</span><span class="br">发送图像</span>
+<span class="br">查询身份</span><span class="br">审计日志</span>
+<span style="margin-left:auto;" class="br">高级设置</span>
+</div>
+
+<div style="display:grid;grid-template-columns:180px minmax(0,1fr) 142px;gap:10px;padding:10px;">
+
+<div style="display:flex;flex-direction:column;gap:8px;">
+<div class="cd">
+<p class="hd">会话状态</p>
+<div style="display:flex;align-items:center;gap:6px;color:var(--color-text-success);font-size:12px;"><span class="dt" style="background:var(--color-text-success);"></span>ESTABLISHED</div>
+<div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px;line-height:1.6;">SessionId 6f60aba2d4211f9d<br>角色 admin · 权限 4 项</div>
+</div>
+<div class="cd">
+<p class="hd">握手进度</p>
+<div style="display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--color-text-secondary);">
+<span><span class="dt" style="background:var(--color-text-success);"></span> HELLO</span>
+<span><span class="dt" style="background:var(--color-text-success);"></span> HELLO_ACK</span>
+<span><span class="dt" style="background:var(--color-text-success);"></span> AUTH</span>
+<span><span class="dt" style="background:var(--color-text-success);"></span> 密钥请求</span>
+<span><span class="dt" style="background:var(--color-text-success);"></span> 密钥分发</span>
+<span><span class="dt" style="background:var(--color-text-success);"></span> 密钥确认</span>
+<span><span class="dt" style="background:var(--color-text-success);"></span> 确认应答</span>
+</div>
+</div>
+<div class="cd">
+<p class="hd">连接设置</p>
+<div style="font-size:11px;color:var(--color-text-secondary);line-height:1.7;">角色 客户端<br>对端 127.0.0.1:9000</div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:8px;min-width:0;">
+<div class="cd" style="flex:1;">
+<p class="hd">短消息</p>
+<div style="display:flex;flex-direction:column;gap:6px;">
+<div style="align-self:flex-end;max-width:78%;background:var(--color-background-info);color:var(--color-text-info);border-radius:10px;padding:6px 10px;font-size:11px;">你好，Bob，这是加密传输的消息</div>
+<div style="align-self:flex-start;max-width:78%;background:var(--color-background-secondary);border-radius:10px;padding:6px 10px;font-size:11px;">已收到，完整性校验通过（CMAC）</div>
+</div>
+<div style="display:flex;gap:6px;margin-top:10px;">
+<span style="flex:1;border:0.5px solid var(--color-border-tertiary);border-radius:6px;padding:5px 8px;font-size:11px;color:var(--color-text-tertiary);">输入要安全传输的短消息</span>
+<span class="bp">发送</span>
+</div>
+</div>
+<div class="cd">
+<p class="hd">文件 / 图像传输</p>
+<div style="display:flex;gap:10px;align-items:center;">
+<div style="width:40px;height:40px;border-radius:6px;background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);flex:none;"></div>
+<div style="flex:1;min-width:0;">
+<div style="font-size:11px;color:var(--color-text-secondary);">test_file_1MB.bin · 16 块</div>
+<div style="height:6px;border-radius:3px;background:var(--color-background-secondary);margin-top:5px;overflow:hidden;"><div style="width:72%;height:100%;background:var(--color-text-success);"></div></div>
+<div style="font-size:11px;color:var(--color-text-tertiary);margin-top:4px;">72% · 4.2 MB/s · CRC32 待校验</div>
+</div>
+</div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:8px;">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+<div class="mc"><span style="font-size:11px;color:var(--color-text-secondary);">收包</span><b>128</b></div>
+<div class="mc"><span style="font-size:11px;color:var(--color-text-secondary);">发包</span><b>96</b></div>
+<div class="mc"><span style="font-size:11px;color:var(--color-text-secondary);">拒绝</span><b>2</b></div>
+<div class="mc"><span style="font-size:11px;color:var(--color-text-secondary);">吞吐</span><b>4.2</b></div>
+</div>
+<div class="cd" style="flex:1;">
+<p class="hd">运行日志</p>
+<div style="font-size:11px;line-height:1.7;color:var(--color-text-secondary);">
+<div>握手完成，进入 ESTABLISHED</div>
+<div style="color:var(--color-text-success);">文件发送成功 CRC32 通过</div>
+<div style="color:var(--color-text-danger);">拒绝未知身份 eve 的发送</div>
+</div>
+</div>
+</div>
+
+</div>
+
+<div style="display:flex;gap:14px;padding:6px 14px;background:var(--color-background-secondary);border-top:0.5px solid var(--color-border-tertiary);font-size:11px;color:var(--color-text-secondary);">
+<span>端口 9000</span><span>AES-128-CTR + CMAC</span><span>会话时长 00:12</span><span style="margin-left:auto;">就绪</span>
+</div>
+
+</div>

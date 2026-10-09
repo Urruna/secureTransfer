@@ -82,6 +82,7 @@ target_link_libraries(st_protocol PUBLIC st_network st_crypto)
 # ---------------------------------------------------------------------------
 add_library(st_security STATIC
         src/security/access_control.cpp
+        src/security/attack_report.cpp
         src/security/keystore.cpp
         src/security/replay_guard.cpp
         src/security/session.cpp)

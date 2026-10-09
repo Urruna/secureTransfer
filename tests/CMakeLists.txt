@@ -41,6 +41,7 @@ st_add_test(test_replay_guard unit/test_replay_guard.cpp)
 st_add_test(test_session_state unit/test_session_state.cpp)
 st_add_test(test_transfer_meta unit/test_transfer_meta.cpp)
 st_add_test(test_access_control unit/test_access_control.cpp)
+st_add_test(test_reject_gate unit/test_reject_gate.cpp)
 
 # ---------------- 第二部分集成测试 ----------------
 st_add_test(test_secure_roundtrip integration/test_secure_roundtrip.cpp)

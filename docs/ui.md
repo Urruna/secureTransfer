@@ -13,11 +13,12 @@
 | 项目 | 内容 |
 | --- | --- |
 | 技术栈 | **Qt 5.12 Widgets（C++）**，与安全内核同一进程，直接调用 `SecureSession` / `FileSender` / `AccessController` |
-| 代码量 | 3 个源文件约 1100 行（`apps/ui/main.cpp`、`main_window.*`、`session_worker.*`） |
+| 代码量 | 4 个源文件约 1900 行（`apps/ui/main.cpp`、`app_theme.h`、`main_window.*`、`session_worker.*`） |
 | 界面语言 | 中文（少量通用术语用英文，如 SessionId、CRC32、IMAGE） |
-| 运行位置 | 虚拟机桌面（`DISPLAY=:0`） |
-| 截图 | [`docs/screenshots/`](screenshots/README.md)（服务端视角 + 客户端视角各一张） |
+| 运行位置 | Windows 桌面（主力）/ 虚拟机桌面（`DISPLAY=:0`） |
+| 截图 | [`docs/screenshots/`](screenshots/README.md)（服务端视角 + 客户端视角各一张；改版后见 §12） |
 | 关键设计 | **界面不实现任何密码学逻辑**：加密 / 完整性 / 认证 / 密钥分发 / 防重放 / 访问控制全部复用已有模块 |
+| 改版 | **2026-10-09**：按 `docs/SecureTransfer_UI改造草图.html` 重做外壳与三栏布局，新增握手 7 步进度、Eve 攻击面板、日志分级/过滤/导出 → 见 **§12** |
 
 ## 2. 需求分析（界面要解决什么问题）
 
@@ -31,15 +32,23 @@
 
 ## 3. 界面分区
 
+> 2026-10-09 改版后（视觉与分区以 `docs/SecureTransfer_UI改造草图.html` 为准）：
+> **标题条 → 工具条 → 三栏 → 状态栏**。
+
 | 区域 | 控件 | 作用 |
 | --- | --- | --- |
-| 1. 连接与身份 | 角色（客户端/服务端）、对端地址、端口、本端身份、对端身份、密钥配置、访问策略、接收目录、审计日志、[启动/连接] [断开] | 一个界面既能当 Alice 也能当 Bob；身份可从 alice / eve / mallory / bob 里选 |
-| 2. 安全会话状态 | 状态灯 + 会话信息（SessionId、NonceA/B、我的角色与权限） | 会话是否建立一目了然；SessionId 与 Nonce 是"本次会话"的指纹 |
-| 3. 统计与访问控制 | 收发统计（收发包数、拒绝计数）+ [查询我的角色] [查看审计日志] | 对应 `CMD WHOAMI` / `CMD VIEW_LOG`；后者仅管理员可用 |
-| 4. 短消息 | 历史记录 + 输入框 + [发送] | 明文直接输入，加密在后台完成 |
-| 5. 文件 / 图像传输 | [选择文件…] [选择图像…] + 进度条 + 结果标签 | 走第四轮实现的分块 / 单包传输，显示 CRC32 校验结果 |
-| 6. Eve 攻击演示 | [篡改上一个数据包并重发] [原样重放上一个数据包] | 一键验证完整性保护与防重放（对端会拒绝并记录） |
-| 7. 运行日志 | 滚动日志 | 握手每一步、访问控制判定、传输细节都写在这里 |
+| 标题条 | 左 "SecureTransfer"／右 状态灯 + 状态文字 | 未连接（灰）/ 连接中（黄）/ 已建立（绿）/ 已结束（红）一目了然 |
+| 工具条 | [连接] [断开] │ [发送文件] [发送图像] [查询身份] [审计日志] … [高级设置…] | 常用动作一屏可达；"查询身份""审计日志"对应 `CMD WHOAMI` / `CMD VIEW_LOG`（后者仅管理员可用） |
+| 左栏 ・会话状态 | 状态行 + 会话信息（SessionId、NonceA/B）+ 角色与权限 | SessionId 与 Nonce 是"本次会话"的指纹 |
+| 左栏 ・握手进度 | 7 步清单（HELLO / HELLO_ACK / AUTH / 密钥请求 / 密钥分发 / 密钥确认 / 确认应答） | 由内核 `onHandshakeStep` 回调实时点亮，握手不再是黑盒 |
+| 左栏 ・连接设置 | 角色（客户端/服务端）、对端地址、端口、本端身份 + 参数摘要 | 一个界面既能当 Alice 也能当 Bob；身份可从 alice / eve / mallory / bob 里选 |
+| 中栏 ・短消息 | 气泡式历史（本端蓝底右对齐 / 对端灰底左对齐）+ 输入框 + [发送] | 明文直接输入，加密在后台完成 |
+| 中栏 ・文件 / 图像传输 | [选择文件…] [选择图像…] + 进度条 + 结果标签 | 走第四轮的分块 / 单包传输，显示 CRC32 校验结果 |
+| 中栏 ・Eve 攻击演示 | [篡改上一个数据包并重发] [原样重放上一个数据包] + 三段式结果面板 | 显示"动作 → 对端拦截关卡 → 结果"，关卡来自内核 `RejectGate` |
+| 右栏 ・统计 | 2×2 数字块：收包 / 发包 / 拒绝 / 吞吐（MB/s） | 数字来自 `ProtocolStats` 摘要，吞吐按会话时长折算 |
+| 右栏 ・运行日志 | 日志视图 + 级别下拉 + 关键字过滤 + [导出] | 按级别着色；握手每一步、访问控制判定、传输细节都写在这里，可导出为 UTF-8 文本 |
+| 状态栏 | 端口 ｜ AES-128-CTR + CMAC ｜ 会话时长 ｜ 就绪 | 会话时长每秒刷新 |
+| 高级设置（对话框） | 对端身份、密钥配置、访问策略、接收目录、审计日志 | 建链参数不再占用主界面；下次"连接"时生效 |
 
 ## 4. 关键设计决策
 
@@ -94,6 +103,15 @@ access::AccessController                  // 访问控制与审计
 ![客户端视角](screenshots/ui_client.png)
 
 上图：图形界面作为**客户端**，自动发送中文短消息、查询角色、发 1 MB 文件与图像。
+
+**2026-10-09 改版后**（同一场景，双窗口同时运行，`PrintWindow` 抓取）：
+
+![改版后 · 服务端](screenshots/ui_redesign_server.png)
+
+![改版后 · 客户端](screenshots/ui_redesign_client.png)
+
+上图：左侧"握手进度"7 步全绿、"统计"数字块、右栏按级别着色的运行日志；
+客户端窗口的短消息为左右分栏气泡。
 
 （截图的获取方式见 [`screenshots/README.md`](screenshots/README.md)。）
 
@@ -306,3 +324,65 @@ connect() 失败: WSA error 10061 (由于目标计算机积极拒绝，无法连
 
 已实测：Windows（物理机）↔ Ubuntu 621（虚拟机）双向通信成功，
 接收文件 sha256 与源文件一致；Linux 侧还有网络命名空间模拟的两台独立主机测试。
+
+---
+
+## 12. 2026-10-09 界面改版（样式重构 + 握手进度 + Eve 攻击面板）
+
+> 计划与决策记录见 [`ui_redesign_plan.md`](ui_redesign_plan.md)；
+> 视觉规范以 [`SecureTransfer_UI改造草图.html`](SecureTransfer_UI改造草图.html) 为准。
+
+### 12.1 做了什么
+
+| 层 | 改动 | 文件 |
+| --- | --- | --- |
+| 内核（纯增量） | `RejectGate` 枚举 + `lastRejectGate()`；`SessionConfig::onHandshakeStep` 回调 | `include/security/session.h`、`src/security/session.cpp` |
+| 回执 / 留档 | 受害端终止前回 `ATTACK-REPORT`；攻击日志单独一份 | `include/security/attack_report.h`、`src/security/attack_report.cpp`、`include/common/demo_reply.h` |
+| 主题 | 内嵌 QSS（浅色扁平）+ 语义色 + 日志级别色 | `apps/ui/app_theme.h`（新增） |
+| 外壳与三栏 | 标题条 / 工具条 / 三栏 / 状态栏；高级设置对话框 | `apps/ui/main_window.{h,cpp}` |
+| 工作线程 | 新增 `handshakeStep(int)` 信号；会话摘要改为两行（会话信息 / 角色权限） | `apps/ui/session_worker.{h,cpp}` |
+| 入口 | 高 DPI（**在 QApplication 之前**）+ 主题（**在建任何控件之前**）+ 窗口图标 | `apps/ui/main.cpp` |
+| 测试 | `test_reject_gate`（4 条断言） | `tests/unit/test_reject_gate.cpp`、`tests/CMakeLists.txt` |
+
+### 12.2 三个必须知道的实现约束
+
+1. **QSS 必须先于控件创建**：样式表会改变 `sizeHint`，而本项目"文字不被压扁"的
+   保证方式是"最小高度 = `sizeHint().height()`"。顺序错了，"文字只显示一半"会复发。
+2. **不引入图片/图标资源**：图标一律 `QStyle::standardIcon()`，
+   主题是内嵌字符串而不是 `.qrc` → 打包后的 exe 不依赖任何外部样式文件，
+   也不会因为 `Qt5::Svg` 缺失而丢箭头。
+3. **`QComboBox` / `QSpinBox` 上了 QSS 之后必须补子控件规则**
+   （`::drop-down` / `::up-button` / `::down-button`），否则下拉箭头会消失。
+
+### 12.3 验证方式（可复现）
+
+```bash
+# 1) 布局回归：打印每个控件的实际尺寸 / 最小高度 / sizeHint
+./build-win/st_ui.exe --print-geometry
+./build-win/st_ui.exe --print-geometry --geometry 1040x660
+#    判据：每个控件 height ≥ sizeHint；左栏滚动区 hScroll=0（内容没被横向裁掉）
+
+# 2) 单元测试
+ctest --test-dir build-win        # 17 / 17
+
+# 3) 双窗口演示 + 截图
+./build-win/st_ui.exe --server --auto --port 9000 --id bob --peer alice &
+./build-win/st_ui.exe --client --auto --id alice --peer bob --send-text "…" \
+    --send-file experiment_data/test_file_1MB.bin \
+    --send-image experiment_data/test_image_256x256.png --cmd WHOAMI
+```
+
+### 12.4 与草图的偏差（有意为之）
+
+| 偏差 | 原因 |
+| --- | --- |
+| 计划 §5.3 曾设想把"角色 / 对端地址 / 端口"放进工具条，实际放在左栏"连接设置"卡片 | 草图本来就是这么画的；且实机是 200% 缩放、逻辑分辨率仅 1080×720，三个参数塞进工具条会把按钮挤到超出窗口宽度 |
+| 日志分级由 **UI 侧集中解析前缀**（`classifyLogLevel()`），而不是 worker 新增结构化 `logEntry(level, text)` 信号 | 行为等价、改动面更小；将来要升级成结构化信号只需替换这一个函数 |
+| 消息气泡是 `QTextEdit` 富文本（颜色 + 对齐），没有头像和时间戳 | Qt 富文本对 CSS 子集支持有限，做带内边距的圆角气泡要换成自绘控件，收益不大 |
+
+### 12.5 已知限制
+
+1. **拒绝即终止会话**：一次攻击演示后需要重新建链（这是第二轮以来的既定行为，本轮未改）；
+2. 图像缩略图预览未做（计划决策 O3）；
+3. 吞吐数字块按"累计字节 ÷ 会话时长"折算，属平均值而非瞬时值；
+4. 左栏在极小窗口下需要滚动（设计如此：宁可滚动，也不把控件压扁）。

@@ -73,6 +73,13 @@ signals:
     void statsUpdated(const QString& summary);
     void sessionStopped(const QString& reason);
 
+    /// Eve 攻击演示：本端检测到"被安全机制拦下"时发出（携带关卡与原因）。
+    void attackDetected(const QString& gate, const QString& reason);
+
+    /// 握手进度：每推进一步发一次（step ∈ 1..7）。
+    /// 回调发生在工作线程，经 Qt 队列连接投递到 GUI 线程。
+    void handshakeStep(int step);
+
 private:
     enum class CommandKind { kSendText, kSendFile, kCommand, kTamper, kReplay, kClose };
     struct Command {
@@ -92,6 +99,11 @@ private:
     std::deque<Command> queue_;
     std::atomic<bool> stopRequested_{false};
     std::atomic<bool> running_{false};
+
+    /// 攻击演示：最近一次按下的是"篡改"还是"重放"（写进攻击日志）
+    QString lastAttackKind_;
+    /// 攻击日志路径（与审计日志同目录，默认 experiment_data/attack_log.txt）
+    QString attackLogPath_;
 };
 
 #endif  // SECURETRANSFER_APPS_UI_SESSION_WORKER_H

@@ -145,6 +145,9 @@ bool SecureSession::sendRawWireForTesting(const Bytes& wire) {
 }
 
 bool SecureSession::recvPacket(Packet& packet, const char* stage) {
+    // 每次读包先清空关卡记录：读到包且通过全部校验时它就是 kNone，
+    // 失败时由下面各个拒绝点设置，避免 UI 读到上一次的陈旧值。
+    lastRejectGate_ = RejectGate::kNone;
     // 握手总时限：单个 recv 有超时，但"对端每次都刚好发一点"可以无限拖时间。
     // 这里再加一道总时限，防止一个客户端长时间占住服务端（慢速握手/资源占用）。
     if (state_ != SessionState::kEstablished && config_.handshakeDeadlineMs > 0) {
@@ -168,6 +171,7 @@ bool SecureSession::recvPacket(Packet& packet, const char* stage) {
 
     Frame frame;
     if (!network_.receiveFrame(frame)) {
+        lastRejectGate_ = RejectGate::kFrame;
         return fail(std::string(stage) + " 接收失败: " + network_.lastError());
     }
     stats_.receivedBytes += frame.payload.size() + Frame::kLengthFieldSize;
@@ -175,14 +179,17 @@ bool SecureSession::recvPacket(Packet& packet, const char* stage) {
     std::string decodeError;
     if (!Packet::decode(frame.payload, packet, &decodeError)) {
         ++stats_.rejectedFormat;
+        lastRejectGate_ = RejectGate::kFormat;
         return fail(std::string(stage) + " 数据包格式非法: " + decodeError);
     }
     if (sessionIdKnown_ && packet.sessionId != sessionId_) {
         ++stats_.rejectedFormat;
+        lastRejectGate_ = RejectGate::kSessionId;
         return fail(std::string(stage) + " SessionId 不属于当前会话");
     }
     if (packet.direction != incomingDirection()) {
         ++stats_.rejectedFormat;
+        lastRejectGate_ = RejectGate::kDirection;
         return fail(std::string(stage) + " 数据包方向不正确（疑似反射攻击）");
     }
 
@@ -221,6 +228,7 @@ bool SecureSession::handshakeAsClient() {
     if (!sendHandshakePacket(MessageType::kHello, nonceA_, hello.bytes(), MacTag{})) {
         return false;
     }
+    notifyHandshakeStep(1);
     logHandshakeStep("① HELLO 已发送 (SessionId=" + toHex(sessionId_) +
                      ", NonceA=" + shortHex(toBytes(nonceA_)) + ")");
 
@@ -252,6 +260,7 @@ bool SecureSession::handshakeAsClient() {
     if (!constantTimeEquals(expectedAck, ack.mac)) {
         return failHandshake("Authentication Failed：对端未能通过 K_master 认证");
     }
+    notifyHandshakeStep(2);
     logHandshakeStep("② HELLO_ACK 验证通过 → Bob 身份认证成功");
 
     // ③ AUTH：向 Bob 证明自己的身份
@@ -262,6 +271,7 @@ bool SecureSession::handshakeAsClient() {
     if (!sendHandshakePacket(MessageType::kAuth, nonceA_, Bytes{}, tagA)) {
         return false;
     }
+    notifyHandshakeStep(3);
     logHandshakeStep("③ AUTH 已发送 → 本端身份已证明");
 
     // ④ KEY_REQUEST
@@ -272,6 +282,7 @@ bool SecureSession::handshakeAsClient() {
     if (!sendHandshakePacket(MessageType::kKeyRequest, nonceA_, Bytes{}, tagRequest)) {
         return false;
     }
+    notifyHandshakeStep(4);
     logHandshakeStep("④ KEY_REQUEST 已发送 → 请求分发会话密钥");
 
     // ⑤ KEY_EXCHANGE：验证并解包 K_session
@@ -301,6 +312,7 @@ bool SecureSession::handshakeAsClient() {
     for (std::size_t i = 0; i < sessionKey_.size(); ++i) {
         sessionKey_[i] = static_cast<Byte>(exchange.body[i] ^ keyStream[i]);
     }
+    notifyHandshakeStep(5);
     logHandshakeStep("⑤ KEY_EXCHANGE 验证通过并解包 → 已获得 K_session");
 
     // ⑥ KEY_CONFIRM：用 K_session 证明自己确实拿到了密钥
@@ -310,6 +322,7 @@ bool SecureSession::handshakeAsClient() {
     if (!sendHandshakePacket(MessageType::kKeyConfirm, nonceA_, Bytes{}, confirm)) {
         return false;
     }
+    notifyHandshakeStep(6);
     logHandshakeStep("⑥ KEY_CONFIRM 已发送 → 本端已持有 K_session");
 
     // ⑦ KEY_CONFIRM_ACK：确认 Bob 也持有同一个 K_session
@@ -327,6 +340,7 @@ bool SecureSession::handshakeAsClient() {
     if (!constantTimeEquals(expectedConfirmAck, confirmAck.mac)) {
         return failHandshake("KEY_CONFIRM_ACK 验证失败：双方的 K_session 不一致");
     }
+    notifyHandshakeStep(7);
     logHandshakeStep("⑦ KEY_CONFIRM_ACK 验证通过 → 双方持有同一个 K_session");
     return true;
 }
@@ -361,6 +375,7 @@ bool SecureSession::handshakeAsServer() {
         return failHandshake("发起方自称 \"" + aliceId + "\"，与期望身份 \"" +
                              config_.peerId + "\" 不符");
     }
+    notifyHandshakeStep(1);
     logHandshakeStep("① HELLO 收到 (SessionId=" + toHex(sessionId_) + ", Alice_ID=" +
                      aliceId + ", NonceA=" + shortHex(toBytes(nonceA_)) + ")");
 
@@ -375,6 +390,7 @@ bool SecureSession::handshakeAsServer() {
     if (!sendHandshakePacket(MessageType::kHelloAck, nonceB_, ackBody.bytes(), tagAck)) {
         return false;
     }
+    notifyHandshakeStep(2);
     logHandshakeStep("② HELLO_ACK 已发送 (NonceB=" + shortHex(toBytes(nonceB_)) + ")");
 
     // ③ AUTH：验证 Alice 的身份
@@ -392,6 +408,7 @@ bool SecureSession::handshakeAsServer() {
     if (!constantTimeEquals(expectedAuth, auth.mac)) {
         return failHandshake("Authentication Failed：对端未能通过 K_master 认证");
     }
+    notifyHandshakeStep(3);
     logHandshakeStep("③ AUTH 验证通过 → Alice 身份认证成功（双向认证完成）");
 
     // ④ KEY_REQUEST
@@ -427,6 +444,9 @@ bool SecureSession::handshakeAsServer() {
     if (!sendHandshakePacket(MessageType::kKeyExchange, nonceB_, wrapped, tagExchange)) {
         return false;
     }
+    // 服务端把 ④ 与 ⑤ 合并成一次日志；进度条要的是"7 步"，所以这里连续触发两步
+    notifyHandshakeStep(4);
+    notifyHandshakeStep(5);
     logHandshakeStep("④⑤ KEY_REQUEST 验证通过，KEY_EXCHANGE 已发送 → K_session 已包裹分发");
 
     // ⑥ KEY_CONFIRM：验证 Alice 也持有 K_session
@@ -444,6 +464,7 @@ bool SecureSession::handshakeAsServer() {
     if (!constantTimeEquals(expectedConfirm, confirm.mac)) {
         return failHandshake("KEY_CONFIRM 验证失败：对端未持有同一个 K_session");
     }
+    notifyHandshakeStep(6);
     logHandshakeStep("⑥ KEY_CONFIRM 验证通过 → 双方持有同一个 K_session");
 
     // ⑦ KEY_CONFIRM_ACK：反向确认
@@ -453,6 +474,7 @@ bool SecureSession::handshakeAsServer() {
     if (!sendHandshakePacket(MessageType::kKeyConfirmAck, nonceB_, Bytes{}, confirmAck)) {
         return false;
     }
+    notifyHandshakeStep(7);
     logHandshakeStep("⑦ KEY_CONFIRM_ACK 已发送 → 安全会话建立完成");
     return true;
 }
@@ -580,11 +602,13 @@ bool SecureSession::acceptOneClient(int clientWaitMs) {
 bool SecureSession::sendMessage(MessageType type, const Bytes& plaintext) {
     if (state_ != SessionState::kEstablished) {
         ++stats_.rejectedState;
+        lastRejectGate_ = RejectGate::kState;
         return fail(std::string("会话尚未建立，不能发送业务数据（当前状态: ") +
                     sessionStateToString(state_) + "）");
     }
     if (!isDataBearing(type)) {
         ++stats_.rejectedState;
+        lastRejectGate_ = RejectGate::kType;
         return fail(std::string("消息类型 ") + messageTypeToString(type) +
                     " 不允许携带业务数据");
     }
@@ -620,8 +644,10 @@ bool SecureSession::sendMessage(MessageType type, const Bytes& plaintext) {
 }
 
 bool SecureSession::receiveMessage(MessageType& type, Bytes& plaintext) {
+    lastRejectGate_ = RejectGate::kNone;  // 同 recvPacket：先清空，成功即 kNone
     if (state_ != SessionState::kEstablished) {
         ++stats_.rejectedState;
+        lastRejectGate_ = RejectGate::kState;
         return fail(std::string("会话尚未建立，不能接收业务数据（当前状态: ") +
                     sessionStateToString(state_) + "）");
     }
@@ -632,6 +658,7 @@ bool SecureSession::receiveMessage(MessageType& type, Bytes& plaintext) {
     }
     if (!isDataBearing(packet.type)) {
         ++stats_.rejectedState;
+        lastRejectGate_ = RejectGate::kType;
         return protocolViolation(std::string("会话已建立，但仍收到非业务数据包: ") +
                                  messageTypeToString(packet.type));
     }
@@ -641,12 +668,14 @@ bool SecureSession::receiveMessage(MessageType& type, Bytes& plaintext) {
     std::string replayReason;
     if (!replayGuard_.wouldAccept(packet.sequence, &replayReason)) {
         ++stats_.rejectedReplay;
+        lastRejectGate_ = RejectGate::kReplay;
         ST_LOG_ERROR(kLogModule,
                      std::string("Replay Attack Detected - Packet rejected: ") + replayReason);
         return fail("Replay Attack Detected: " + replayReason);
     }
     if (!crypto_.verifyCmac(macKey_, packet.encode(), packet.mac)) {
         ++stats_.rejectedMac;
+        lastRejectGate_ = RejectGate::kMac;
         ST_LOG_ERROR(kLogModule,
                      "CMAC verification failed - Message rejected（数据可能在传输中被篡改）");
         return fail("CMAC verification failed: 数据包完整性校验未通过，已拒绝该消息");
@@ -669,6 +698,7 @@ SecureSession::ReceiveStatus SecureSession::tryReceiveMessage(MessageType& type,
                                                              int waitMs) {
     if (state_ != SessionState::kEstablished) {
         ++stats_.rejectedState;
+        lastRejectGate_ = RejectGate::kState;
         (void)fail(std::string("会话尚未建立，不能接收业务数据（当前状态: ") +
                    sessionStateToString(state_) + "）");
         return ReceiveStatus::kClosed;
@@ -726,6 +756,10 @@ bool SecureSession::failHandshake(const std::string& reason) {
 
 bool SecureSession::protocolViolation(const std::string& reason) {
     ++stats_.rejectedState;
+    // 兜底：具体关卡由调用点决定（例如"已建立却收到非业务包"会先设成 kType）
+    if (lastRejectGate_ == RejectGate::kNone) {
+        lastRejectGate_ = RejectGate::kState;
+    }
     return fail("协议违规: " + reason);
 }
 
@@ -733,4 +767,25 @@ void SecureSession::logHandshakeStep(const std::string& message) const {
     if (config_.logHandshake) {
         ST_LOG_INFO(kHandshakeModule, message);
     }
+}
+
+void SecureSession::notifyHandshakeStep(int step) const {
+    if (config_.onHandshakeStep) {
+        config_.onHandshakeStep(step);
+    }
+}
+
+const char* rejectGateToString(RejectGate gate) {
+    switch (gate) {
+        case RejectGate::kNone:      return "未被拒绝";
+        case RejectGate::kFrame:     return "① TCP 帧读取失败";
+        case RejectGate::kFormat:    return "② 数据包格式非法";
+        case RejectGate::kSessionId: return "③ SessionId 不匹配";
+        case RejectGate::kDirection: return "④ 方向不符（疑似反射）";
+        case RejectGate::kType:      return "⑤ 消息类型不允许";
+        case RejectGate::kReplay:    return "⑥ 序号重放（防重放拦截）";
+        case RejectGate::kMac:       return "⑦ CMAC 完整性校验失败";
+        case RejectGate::kState:     return "⑧ 状态机不允许";
+    }
+    return "未知";
 }

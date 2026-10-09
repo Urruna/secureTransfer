@@ -16,13 +16,17 @@
 #include "common/hex.h"
 #include "common/log.h"
 #include "common/demo_reply.h"
+#include "common/path_utils.h"
 #include "crypto/aes_crypto_provider.h"
 #include "protocol/packet.h"
 #include "security/access_control.h"
+#include "security/attack_report.h"
 #include "security/keystore.h"
 #include "security/session.h"
 
 namespace {
+
+const char* const kLogModule = "SessionWorker";
 
 /// 界面语言：把 C++ 侧的类型名转成中文可读文本。
 QString typeToText(MessageType type) {
@@ -176,6 +180,16 @@ void SessionWorker::run(UiConfig config) {
         }
     }
 
+    // 攻击日志：与审计日志放在同一目录（默认 experiment_data/attack_log.txt）。
+    // 单独一份文件，避免把"攻击演示"混进访问控制审计里。
+    {
+        const QString auditPath = config.accessLog;
+        const int slash = auditPath.lastIndexOf('/');
+        const QString dir = slash > 0 ? auditPath.left(slash) : QString("experiment_data");
+        attackLogPath_ = dir + "/attack_log.txt";
+        (void)ensureDirectory(dir.toStdString());
+    }
+
     // ---------------- 3. 会话配置 ----------------
     SessionConfig sessionConfig;
     sessionConfig.localId = config.localId.toStdString();
@@ -187,6 +201,11 @@ void SessionWorker::run(UiConfig config) {
     sessionConfig.handshakeTimeoutMs = kHandshakeTimeoutMs;
     sessionConfig.ioTimeoutMs = kIoTimeoutMs;     // 只在"包读了一半对端卡住"时兜底
     sessionConfig.logHandshake = true;            // 握手每一步都写日志（界面上能看到）
+    // 握手每推进一步就通知界面（内核只回调 step 号，中文名由界面侧映射）。
+    // 回调在工作线程执行，emit 的 Qt 信号会自动排队到 GUI 线程。
+    sessionConfig.onHandshakeStep = [this](int step) {
+        emit handshakeStep(step);
+    };
 
     AesCryptoProvider crypto(nullptr);            // 真实 AES-CTR + 第一部分 CMAC
     SecureSession session(crypto, sessionConfig);
@@ -238,8 +257,10 @@ void SessionWorker::run(UiConfig config) {
         return;
     }
 
+    // 摘要分两行：第一行会话指纹（SessionId / Nonce），第二行角色与权限。
+    // 界面据此把"会话状态"卡片拆成两行显示（不再挤成一行）。
     emit sessionEstablished(
-        QString("SessionId %1 ｜ NonceA %2 ｜ NonceB %3 ｜ 我的角色 %4 [%5]")
+        QString("SessionId %1 ｜ NonceA %2 ｜ NonceB %3\n我的角色 %4 ｜ 权限 %5")
             .arg(QString::fromStdString(toHex(session.sessionId())))
             .arg(fromHexBytes(toBytes(session.nonceA())))
             .arg(fromHexBytes(toBytes(session.nonceB())))
@@ -345,8 +366,10 @@ void SessionWorker::run(UiConfig config) {
                     }
                     packet.sequence += 1;
                     attack = packet.encodeWithMac();
+                    lastAttackKind_ = "tamper";
                     emit logLine("【攻击演示】篡改上一个数据包的密文字节并重发（对端应拒绝）");
                 } else {
+                    lastAttackKind_ = "replay";
                     emit logLine("【攻击演示】原样重放上一个数据包（对端应判定为重放）");
                 }
                 if (!session.sendRawWireForTesting(attack)) {
@@ -372,6 +395,23 @@ void SessionWorker::run(UiConfig config) {
             continue;  // 暂时没有数据：回到循环顶部处理命令/停止标志
         }
         if (status == SecureSession::ReceiveStatus::kClosed) {
+            // 如果是被安全机制拦下的（篡改/重放/伪造…），在关闭前给对端回一条判定结果，
+            // 让攻击端的界面也能显示"我倒在哪一关"；并留一份攻击日志。
+            const RejectGate gate = session.lastRejectGate();
+            if (attack::isAttackReject(gate) && session.state() == SessionState::kEstablished) {
+                const std::string report = attack::formatAttackReport(
+                    gate, session.receiveSequence(), session.lastError());
+                if (!session.sendMessage(MessageType::kData, stringToBytes(report))) {
+                    ST_LOG_DEBUG(kLogModule, "ATTACK-REPORT 发送失败（对端可能已关闭）");
+                }
+                attack::appendAttackLog(attackLogPath_.toStdString(), lastAttackKind_.toStdString(),
+                                        gate, session.lastError());
+                emit attackDetected(QString::fromUtf8(rejectGateToString(gate)),
+                                    QString::fromStdString(session.lastError()));
+                emit logLine(QString("【攻击演示】对端在第 %1 关拦下（%2），已回执并记录攻击日志")
+                                 .arg(QString::fromUtf8(rejectGateToString(gate)))
+                                 .arg(lastAttackKind_));
+            }
             emit sessionStopped("接收失败（会话终止）：" +
                                 QString::fromStdString(session.lastError()));
             stoppedNotified = true;

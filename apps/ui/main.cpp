@@ -14,8 +14,10 @@
 
 #include <QApplication>
 #include <QFont>
+#include <QStyle>
 #include <QStringList>
 
+#include "app_theme.h"
 #include "main_window.h"
 
 #include "common/console.h"
@@ -52,9 +54,22 @@ void printUsage() {
 
 int main(int argc, char** argv) {
     stconsole::ensureUtf8();
+
+    // 高 DPI：Qt 5 必须在 QApplication 构造**之前**设置，否则高 DPI 屏上文字发虚。
+    // （本机是 150% 缩放的 2160×1440 屏，开启后控件按逻辑像素布局，
+    //   主窗口的最小尺寸/最小高度机制仍然有效。）
+    QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
+    QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
     QApplication app(argc, argv);
     QApplication::setApplicationName("SecureTransfer");
     QApplication::setApplicationDisplayName("SecureTransfer — 安全的信息传输套件");
+
+    // 主题必须在创建任何控件之前应用（QSS 会影响 sizeHint，见 app_theme.h 的说明）
+    stui::applyTheme(app);
+    if (app.style() != nullptr) {
+        // 用系统标准图标当窗口图标，避免附带图片资源
+        app.setWindowIcon(app.style()->standardIcon(QStyle::SP_ComputerIcon));
+    }
 
     // 统一设置稍大一点的字体，保证中文显示清晰
     QFont font = app.font();

@@ -21,6 +21,8 @@
 //        --policy  ：加载访问控制策略做**本地提示**（真正的裁决在服务端）
 //        --whoami  ：向服务端查询自己的角色与权限
 //        --view-log：请求查看服务端审计日志（仅管理员可用）
+//        --attack  ：Eve 攻击演示：篡改（tamper）或重放（replay）上一个已发送的数据包，
+//                    对端若被拦下会回一条 ATTACK-REPORT，这里会打印判定结果
 //  示例：./alice --file test_file_1MB.bin --image test_image_1024x768.png --whoami
 // ============================================================================
 
@@ -188,6 +190,7 @@ int main(int argc, char** argv) {
     std::string identityOverride;
     bool askWhoAmI = false;
     bool askViewLog = false;
+    std::string attackKind;   ///< --attack tamper|replay：Eve 攻击演示（可选）
 
     int positional = 0;
     for (std::size_t i = 1; i < args.size(); ++i) {
@@ -214,6 +217,8 @@ int main(int argc, char** argv) {
             usePlaceholderMac = true;
         } else if (arg == "--quiet") {
             quiet = true;
+        } else if (arg == "--attack" && i + 1 < args.size()) {
+            attackKind = args[++i];
         } else if (!arg.empty() && arg[0] != '-') {
             if (positional == 0) {
                 host = arg;
@@ -421,6 +426,48 @@ int main(int argc, char** argv) {
     }
 
     if (failures == 0) {
+        // ---- Eve 攻击演示（可选：`--attack tamper|replay`）----
+        // 复用界面上"篡改 / 重放上一个已发送数据包"的逻辑，便于脚本化演示与取证。
+        if (!attackKind.empty()) {
+            const Bytes wire = session.lastSentWireForTesting();
+            if (wire.empty()) {
+                std::cerr << "[WARN] 还没有已发送的数据包，无法演示攻击" << std::endl;
+            } else {
+                Bytes attack = wire;
+                bool prepared = true;
+                if (attackKind == "tamper") {
+                    Packet packet;
+                    if (!Packet::decode(wire, packet)) {
+                        std::cerr << "[WARN] 无法解析上一个数据包" << std::endl;
+                        prepared = false;
+                    } else {
+                        if (!packet.body.empty()) {
+                            packet.body[0] = static_cast<Byte>(packet.body[0] ^ 0xFF);
+                        }
+                        packet.sequence += 1;   // 跳过防重放，才能测到完整性校验那一关
+                        attack = packet.encodeWithMac();
+                        std::cout << "【攻击演示】篡改上一个数据包的密文字节并重发（对端应拒绝）"
+                                  << std::endl;
+                    }
+                } else {
+                    std::cout << "【攻击演示】原样重放上一个数据包（对端应判定为重放）"
+                              << std::endl;
+                }
+                if (prepared && session.sendRawWireForTesting(attack)) {
+                    // 等对端的判定回执（实现了攻击回执的对端会回一条 ATTACK-REPORT）
+                    MessageType reportType = MessageType::kError;
+                    Bytes reportBody;
+                    if (session.receiveMessage(reportType, reportBody)) {
+                        std::cout << "  对端判定    : " << describePayload(reportBody) << std::endl;
+                    } else {
+                        std::cout << "  （对端已关闭，未收到判定回执）" << std::endl;
+                    }
+                } else if (prepared) {
+                    std::cerr << "[WARN] 攻击包发送失败: " << session.lastError() << std::endl;
+                }
+            }
+        }
+
         if (!session.sendMessage(MessageType::kClose, Bytes{})) {
             std::cerr << "[WARN] 发送 CLOSE 失败: " << session.lastError() << std::endl;
         }

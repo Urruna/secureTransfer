@@ -10,7 +10,7 @@
 //  解决方法（演示约定，与安全协议本身无关）：
 //    自动回复统一以 "ACK:" 开头；收到以下"回复型"消息时不再自动回复——
 //      ACK: / FILE OK / FILE FAILED / ROLE / AUDIT LOG / ACCESS DENIED /
-//      UNKNOWN COMMAND / 已收到
+//      UNKNOWN COMMAND / ATTACK-REPORT / 已收到
 //    这样"用户消息 → 确认 → 停止"，不会形成环路。
 //
 //  注意：这只是**应用层的演示约定**，不参与加密与完整性保护；
@@ -32,7 +32,8 @@ inline bool shouldAutoReply(const std::string& text) {
         "ROLE ",          // WHOAMI 的回复
         "AUDIT LOG",      // VIEW_LOG 的回复
         "ACCESS DENIED",  // 访问控制拒绝
-        "UNKNOWN COMMAND" // 未知命令回复
+        "UNKNOWN COMMAND", // 未知命令回复
+        "ATTACK-REPORT"   // 受害端的攻击判定回执（见 security/attack_report.h）
     };
     for (const char* prefix : kReplyPrefixes) {
         if (text.rfind(prefix, 0) == 0) {

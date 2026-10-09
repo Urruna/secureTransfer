@@ -38,6 +38,7 @@
 #include "common/path_utils.h"
 #include "common/text_encoding.h"
 #include "security/access_control.h"
+#include "security/attack_report.h"
 #include "common/hex.h"
 #include "common/log.h"
 #include "common/console.h"
@@ -195,7 +196,8 @@ namespace {
 bool serveOneSession(SecureSession& session,
                      acl::AccessController& accessController,
                      const SessionConfig& config,
-                     const std::string& outDir) {
+                     const std::string& outDir,
+                     const std::string& attackLogPath) {
     std::cout << "安全会话已建立。SessionId = " << toHex(session.sessionId()) << std::endl;
     std::cout << "NonceA = " << toHex(session.nonceA()) << std::endl;
     std::cout << "NonceB = " << toHex(session.nonceB()) << std::endl;
@@ -210,6 +212,19 @@ bool serveOneSession(SecureSession& session,
         Bytes plaintext;
         if (!session.receiveMessage(type, plaintext)) {
             std::cerr << "[ERROR] [Bob] 接收失败: " << session.lastError() << std::endl;
+            // 被安全机制拦下（篡改/重放/伪造…）时，关闭前给对端回一条判定结果，
+            // 并把这次攻击写进独立的攻击日志（与 UI 侧共用 security/attack_report.h）。
+            const RejectGate gate = session.lastRejectGate();
+            if (attack::isAttackReject(gate) && session.state() == SessionState::kEstablished) {
+                const std::string report = attack::formatAttackReport(
+                    gate, session.receiveSequence(), session.lastError());
+                if (!session.sendMessage(MessageType::kData, stringToBytes(report))) {
+                    std::cout << "（ATTACK-REPORT 发送失败：对端可能已关闭）" << std::endl;
+                } else {
+                    std::cout << "已向对端回执：" << report << std::endl;
+                }
+                attack::appendAttackLog(attackLogPath, "cli", gate, session.lastError());
+            }
             session.close();
             std::cout << "统计: " << session.stats().summary() << std::endl;
             return false;
@@ -490,6 +505,10 @@ int main(int argc, char** argv) {
     if (!logDir.empty() && logDir != accessLogPath) {
         (void)ensureDirectory(logDir);
     }
+    // 攻击日志与审计日志同目录（单独一份文件，避免把攻击演示混进访问控制审计）
+    const std::string attackLogPath =
+        (logDir.empty() || logDir == accessLogPath ? std::string("experiment_data") : logDir) +
+        "/attack_log.txt";
     if (!outDir.empty()) {
         (void)ensureDirectory(outDir);
     }
@@ -557,7 +576,7 @@ int main(int argc, char** argv) {
 
         consecutiveFailures = 0;
         ++servedSessions;
-        if (!serveOneSession(session, accessController, config, outDir)) {
+        if (!serveOneSession(session, accessController, config, outDir, attackLogPath)) {
             std::cerr << "[WARN] [Bob] 本次会话异常结束（服务继续运行）" << std::endl;
         }
         session.closeConnection();  // 只关连接、保留监听，准备服务下一个客户端

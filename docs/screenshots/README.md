@@ -7,6 +7,8 @@
 | `ui_server.png` | 图形界面作为**服务端**（Bob，角色 admin） | 命令行 Alice（管理员）驱动界面完成一次会话：4 条短消息 + WHOAMI + 查看审计日志 + 1 MB 文件（16 块）+ 图像（单包） |
 | `ui_client.png` | 图形界面作为**客户端**（Alice，角色 admin） | 界面自动发送：中文短消息 + WHOAMI + 1 MB 文件 + 图像，对端为命令行 Bob |
 | `windows_ui_client.png` | **Windows 主机**上的图形界面（客户端，Qt 5.15.19 / MSYS2 MinGW-w64） | 迁移后的界面：另一个 `st_ui` 实例作服务端，界面自动发送短消息 + 64 KB 文件 + WHOAMI，握手 7 步与传输结果都记在界面日志里 |
+| `ui_redesign_server.png` | **2026-10-09 改版后** · 图形界面作为**服务端** | 标题条 / 工具条 / 三栏 / 状态栏；左栏握手 7 步全绿，右栏统计数字块 + 分级着色日志 |
+| `ui_redesign_client.png` | **2026-10-09 改版后** · 图形界面作为**客户端** | 同上；中栏短消息为左右气泡，文件/图像传输结果与 Eve 攻击面板可见 |
 
 ## 截图是怎么产生的（可复现）
 
@@ -59,3 +61,23 @@ cd <项目目录>
 > 注意：`st_ui.exe` 依赖 `Qt5Core.dll` 等 DLL，运行前需要把
 > `D:\AppGallery\dev-tools\msys64\mingw64\bin` 加进 `PATH`；
 > 若要脱离 MSYS2 环境单独分发，需要用 `windeployqt` 打包（见 §23.8 剩余项）。
+
+## 改版后的截图（2026-10-09）
+
+改版后仍用 `PrintWindow` 抓取，但改成"同时开两个 `st_ui` 实例、两个窗口各抓一张"：
+
+```powershell
+# 1) 服务端（先起，等待接入）
+.\build-win\st_ui.exe --server --auto --port 9000 --id bob --peer alice `
+    --out-dir experiment_data\received_ui --access-log experiment_data\access_log_ui.txt
+# 2) 客户端（自动发短消息 + 1 MB 文件 + 图像 + WHOAMI）
+.\build-win\st_ui.exe --client --auto --id alice --peer bob --port 9000 `
+    --send-text "你好，Bob，这是加密传输的消息" `
+    --send-file experiment_data\test_file_1MB.bin `
+    --send-image experiment_data\test_image_256x256.png --cmd WHOAMI
+# 3) 抓窗口：Get-Process st_ui → MainWindowHandle → user32!PrintWindow(flag=2) → PNG
+```
+
+> 抓图脚本要先调用 `SetProcessDPIAware()`：本机是 200% 缩放，
+> 非 DPI 感知的进程拿到的窗口尺寸会被系统缩放，抓出来的图会缺一块
+> （实测会从 2186×1466 变成 1457×977）。

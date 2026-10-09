@@ -64,6 +64,13 @@ struct SessionConfig {
     /// 用途：port == 0 时（由系统分配端口）把真实端口告诉我们，
     ///       测试与演示可以据此避免"客户端早于服务端 listen"的竞态。
     std::function<void(std::uint16_t)> onListening;
+
+    /// 握手每推进一步时回调一次（step ∈ 1..7）。
+    /// 与 onListening 一样是**可选**钩子：不设置就完全不触发。
+    /// 注意：回调发生在**工作线程**（握手就在那条线程里跑），
+    /// 上层如果要用它更新界面，必须自己跨线程（Qt 信号是队列投递）。
+    /// 步骤名不由内核给出（内核不发中文文案），由调用方按 step 映射。
+    std::function<void(int step)> onHandshakeStep;
 };
 
 /// 会话统计，供报告的"传输状态""攻击测试"章节引用。
@@ -82,6 +89,24 @@ struct ProtocolStats {
     /// 单行摘要，便于打印与写进测试报告。
     std::string summary() const;
 };
+
+/// 数据包被拒绝时，具体倒在哪一道校验。
+/// 用途：第三部分 Eve 攻击面板与测试报告精确定位拦截点。
+/// 纯进程内信息：不上网、不参与 MAC、不进 Packet（线上字节格式零变化）。
+enum class RejectGate {
+    kNone,       ///< 未被拒绝（成功，或非协议原因的关闭）
+    kFrame,      ///< ① TCP 帧层读取失败（长度字段非法 / 连接中断）
+    kFormat,     ///< ② 数据包解码失败（Magic / 版本 / 长度越界）
+    kSessionId,  ///< ③ SessionId 不属于当前会话
+    kDirection,  ///< ④ 方向不符（疑似反射攻击）
+    kType,       ///< ⑤ 类型不允许（已建立会话却收到非业务包 / 发送类型非法）
+    kReplay,     ///< ⑥ 序号重放（seq <= 已接收最大序号）
+    kMac,        ///< ⑦ CMAC 完整性校验失败
+    kState       ///< ⑧ 状态机不允许（未建立 / 未认证就收发）
+};
+
+/// RejectGate 的中文短名，供界面直接显示。
+const char* rejectGateToString(RejectGate gate);
 
 /// 单个数据包的可观测信息，用于演示输出与测试报告
 /// （课程要求记录：明文 → 密文 → CMAC → 接收方解密结果 → 完整性验证结果）。
@@ -158,6 +183,11 @@ public:
     SessionState state() const { return state_; }
     bool isEstablished() const { return state_ == SessionState::kEstablished; }
     const SessionId& sessionId() const { return sessionId_; }
+
+    /// 最近一次**被拒绝**时倒在哪一关（Eve 面板用）。
+    /// 语义：只有"被协议或安全机制拦下"才有意义；成功接收会重置成 kNone。
+    RejectGate lastRejectGate() const { return lastRejectGate_; }
+    void resetLastRejectGate() { lastRejectGate_ = RejectGate::kNone; }
     const ProtocolStats& stats() const { return stats_; }
     const std::string& lastError() const { return lastError_; }
     std::uint16_t listeningPort() const { return network_.boundPort(); }
@@ -207,6 +237,8 @@ private:
     bool failHandshake(const std::string& reason);
     bool protocolViolation(const std::string& reason);
     void logHandshakeStep(const std::string& message) const;
+    /// 触发 onHandshakeStep 回调（未设置则什么都不做）。
+    void notifyHandshakeStep(int step) const;
 
     Network network_;
     CryptoProvider& crypto_;
@@ -227,6 +259,7 @@ private:
     std::uint64_t sendSequence_ = 0;
     bool acceptTimedOut_ = false;
     std::chrono::steady_clock::time_point handshakeStart_{};  ///< 握手开始时刻（用于总时限）
+    RejectGate lastRejectGate_ = RejectGate::kNone;           ///< 最近一次拒绝的关卡
     ReplayGuard replayGuard_;
     ProtocolStats stats_;
     std::string lastError_;
