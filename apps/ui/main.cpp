@@ -44,6 +44,10 @@ void printUsage() {
   --cmd <WHOAMI|VIEW_LOG>    会话建立后自动发送该命令（可重复）
   --geometry <宽x高>         强制窗口尺寸，例如 --geometry 940x600（复现小窗口布局问题）
   --print-geometry           打印各控件实际尺寸后退出（排查"文字显示不全"用）
+  --relay                    启动界面时就把 Eve 中继拉起来（真实链路中间人）
+  --relay-listen <端口>      中继监听端口（默认 9400）；本端"端口"要指向它
+  --relay-target <端口>      中继转发到的真实服务端端口（默认 9000）
+  --scenario                 自动运行"一键攻击剧本"（篡改 → 重放 → 丢弃，全部经中继）
   --help                     显示本帮助
 
 不带任何参数时，就是一个可以直接点击操作的图形界面。
@@ -120,6 +124,14 @@ int main(int argc, char** argv) {
             options.geometry = args.at(++i);
         } else if (arg == "--print-geometry") {
             options.printGeometry = true;
+        } else if (arg == "--relay") {
+            options.startRelay = true;
+        } else if (arg == "--relay-listen" && hasNext) {
+            options.relayListen = args.at(++i).toInt();
+        } else if (arg == "--relay-target" && hasNext) {
+            options.relayTarget = args.at(++i).toInt();
+        } else if (arg == "--scenario") {
+            options.scenario = true;
         }
     }
 

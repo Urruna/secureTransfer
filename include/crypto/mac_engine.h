@@ -5,8 +5,9 @@
 //  说明：MAC 算法的接缝。第一部分交付 CMAC 后，只需要实现本接口并注入
 //        AesCryptoProvider，协议层与测试代码完全不用改动。
 //
-//        当前状态：CMAC 仍在第一部分开发中，仓库内提供
-//        PlaceholderMacEngine 作为占位实现（明确标注不具备密码学强度）。
+//        当前状态：第一部分的 CMAC 已交付并接入（见 cmac_engine.h），
+//        系统默认使用它；PlaceholderMacEngine 作为"联调 / 对照"用的占位实现，
+//        只在显式选择时才启用，并且会自报"不具备密码学强度"。
 // ============================================================================
 
 #ifndef SECURETRANSFER_CRYPTO_MAC_ENGINE_H

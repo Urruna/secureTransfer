@@ -23,7 +23,7 @@
                     ▼                           ▼
         ┌───────────────────────────┐  ┌────────────────────────────┐
         │ 第一部分：AES-128 / CMAC   │  │ 第一阶段：Frame / Network   │
-        │ （AES 已接入，CMAC 待交付） │  │ （未改动，27 用例回归基线）  │
+        │ （AES 与 CMAC 均已接入）    │  │ （未改动，27 用例回归基线）  │
         └───────────────────────────┘  └────────────────────────────┘
 ```
 
@@ -69,7 +69,7 @@
 | 防重放 | 严格递增 + 两阶段提交 | 两阶段避免"伪造大序号包把合法包挤掉"的拒绝服务 |
 | 线程模型 | 单线程同步、单会话 | 与第一阶段 `Network` 的非线程安全约定一致，降低出错面 |
 | 对外接口 | `SecureSession` 门面 | 第三部分不需要了解 Frame / Packet / 握手细节 |
-| 非阻塞接收 | `Network::waitReadable()` + `SecureSession::tryReceiveMessage()` | 图形界面需要"边等数据边处理别的事"：`select()` 等可读，数据一到立刻返回，且"暂时没有数据"不被当作错误（详见 `Part2_transfer.md` §24） |
+| 非阻塞接收 | `Network::waitReadable()` + `SecureSession::tryReceiveMessage()` | 图形界面需要"边等数据边处理别的事"：`select()` 等可读，数据一到立刻返回，且"暂时没有数据"不被当作错误（详见 [`history_rounds.md`](history_rounds.md) §24） |
 
 ## 4. 扩展点
 
@@ -127,5 +127,5 @@ for (每个 64 KiB 分块) {
 
 * 位置：`include/network/`、`src/network/`、`tests/unit/test_frame.cpp`、
   `tests/unit/test_network.cpp`、`tests/integration/test_tcp_roundtrip.cpp`；
-* 第一阶段文档保留在 `docs/stage1/`；
+* 第一阶段的设计与决策已合并进 `docs/history_stage1.md`（原 `docs/stage1/` 6 份文档已归档合并）；
 * 每次改动都必须重新运行这三个测试（回归基线）。

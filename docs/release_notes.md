@@ -8,7 +8,7 @@
 > **Eve 攻击面板（动作 → 拦截关卡 → 结果）**、**统计数字块**、
 > **日志分级着色 + 过滤 + 导出**、**高级设置对话框**（收纳对端身份与全部路径项）。
 > 攻击演示现在能看到对端"倒在哪一关"（内核 `RejectGate` + `ATTACK-REPORT` 回执）。
-> 详见 `docs/ui.md` §12 与 `Part2_transfer.md` §29。
+> 详见 [`ui.md`](ui.md) §12 与 [`history_rounds.md`](history_rounds.md) §29。
 
 ### 快速开始
 
@@ -36,6 +36,7 @@
 * 只包含 `keys.conf` 的**模板**，不含任何真实密钥；
 * 首次运行若被 SmartScreen 拦截，选择“更多信息 → 仍要运行”；
 * 仓库为私有仓库，下载前需要用有权限的 GitHub 账号登录；
-* 功能说明、测试与攻击演示证据见 README 与 `Part2_transfer.md`；
+* 功能说明、测试与攻击演示证据见 README、[`requirements.md`](requirements.md) 与
+  [`history_rounds.md`](history_rounds.md)；
 * 这个包由 `.github/workflows/windows-ui.yml` 在**发布 Release 时自动构建并挂载**
   （同时附上 `sha256.txt`）：维护者只需要打 tag、发 Release，其余交给 CI。

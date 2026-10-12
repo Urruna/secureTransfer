@@ -6,9 +6,9 @@
 //
 //        协议层（Packet / 握手 / 会话）只认识这个接口，不关心背后是
 //        "自己写的 AES/CMAC" 还是别的实现：
-//          * AesCryptoProvider    —— 使用第一部分的 AES 成果（真实算法）
+//          * AesCryptoProvider    —— 使用第一部分的 AES + CMAC 成果（当前默认）
 //          * MockCryptoProvider   —— 开发期占位，协议联调用（不安全）
-//          * 未来的 Part1CryptoProvider —— 第一部分交付 CMAC 后接入
+//          * PlaceholderMacEngine —— 只做 MAC 的占位实现，仅供对照演示
 //
 //  约束：
 //    1. aesCtrEncrypt / aesCtrDecrypt 必须支持任意长度（0 字节、1 字节、

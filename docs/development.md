@@ -4,18 +4,18 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| 系统 | Ubuntu 20.04（课程虚拟机 `Ubuntu6.21`） |
-| 编译器 | g++ 9.4（支持 C++17） |
-| 构建 | CMake ≥ 3.10（实测 3.16.3）+ make |
-| 第三方依赖 | **无**（不需要 OpenSSL / Qt / 网络库） |
-| 可选工具 | tcpdump（窃听演示）、openssl（独立交叉验证） |
+| 系统 | 主力：Windows 10/11 + MSYS2 MinGW-w64；同时在 Ubuntu 20.04 虚拟机（`Ubuntu6.21`）上验证 |
+| 编译器 | MinGW-w64 g++ 16.x（Windows）/ g++ 9.4（Ubuntu），均需支持 C++17 |
+| 构建 | CMake ≥ 3.10（实测 3.16.3 / 3.31）+ Ninja 或 make |
+| 第三方依赖 | **无**（算法全部自写；Windows 下只链接系统库 `ws2_32` / `bcrypt`） |
+| 可选依赖 | Qt 5（只有图形界面 `st_ui` 需要；未安装时该目标自动跳过，不影响其它程序） |
+| 可选工具 | Wireshark / tshark 或 tcpdump（窃听演示）、openssl（独立交叉验证）、OpenSSL / Mbed TLS / Botan（**只有性能对比工具**链接它们） |
 
 本项目已实测通过的环境：
 
 ```text
-Ubuntu 20.04.6 LTS / Linux 5.15.0-140-generic / x86_64
-g++ (Ubuntu 9.4.0-1ubuntu1~20.04.3) 9.4.0
-cmake version 3.16.3 / GNU Make 4.2.1
+Windows 11 / MSYS2 MINGW64：g++ 16.2.0 / CMake 3.31 / Qt 5.15.19
+Ubuntu 20.04.6 LTS / Linux 5.15 / x86_64：g++ 9.4.0 / CMake 3.16.3 / Qt 5.12.8
 ```
 
 ## 2. 部署到 `/home/securityTransfer`
@@ -40,17 +40,17 @@ cmake .. && cmake --build . -j4
 ctest --output-on-failure
 ```
 
-产物：
+产物（4 个程序 + 18 个测试程序，`ctest` 全绿）：
 
 ```text
-build/alice  build/bob
-build/cmac_benchmark
-build/tests/test_frame                 build/tests/test_network
-build/tests/test_tcp_roundtrip         build/tests/test_aes_cmac
-build/tests/test_packet                build/tests/test_transcript
-build/tests/test_replay_guard          build/tests/test_session_state
-build/tests/test_secure_roundtrip      build/tests/test_tamper
-build/tests/test_forge                 build/tests/test_replay
+程序：alice  bob  st_ui（Qt，可选）  eve（中间人，攻击演示用）
+工具：crypto_benchmark  crypto_benchmark_soft  cmac_benchmark
+测试：test_frame           test_network          test_tcp_roundtrip
+      test_aes_cmac        test_packet           test_transcript
+      test_replay_guard    test_session_state    test_transfer_meta
+      test_access_control  test_secure_roundtrip test_file_transfer
+      test_access_control_e2e  test_tamper       test_forge
+      test_replay          test_reject_gate     test_mitm
 ```
 
 一键脚本（编译 + ctest + 演示 + 攻击测试）：
@@ -89,7 +89,7 @@ cd /home/securityTransfer/build && ./alice 127.0.0.1 9000
 * `--once`（Bob）：只服务一个客户端就退出——脚本 / 测试用它把服务端收尾；
   不加时 Bob 是**常驻服务**：可连续服务多个客户端，`Ctrl+C` 结束。
   单个客户端握手失败不会再让服务退出（"连上就断"的洪泛也不会），
-  整次握手有总时长上限，慢速客户端会被掐断（见 `Part2_transfer.md` §27）。
+  整次握手有总时长上限，慢速客户端会被掐断（见 [`history_rounds.md`](history_rounds.md) §27）。
 * `--max-sessions <N>`（Bob）：服务 N 次会话后退出（0 = 不限）。
 * `--file <路径>` / `--image <路径>`（Alice）：在 4 条文本消息之后把文件 / 图像安全传给 Bob，
   可重复使用；相对路径会自动到 `--data-dir`（默认 `experiment_data/`）里查找；
@@ -158,7 +158,7 @@ cd /home/securityTransfer/build && ./alice 127.0.0.1 9000 \
     --image test_image_256x256.png --image test_image_1024x768.png
 
 # 逐字节核对接收结果（期望全部一致）
-cd /home/securityTransfer/实验数据
+cd /home/securityTransfer/experiment_data
 for f in test_file_64KB.bin test_file_1MB.bin test_image_256x256.png test_image_1024x768.png; do
     cmp "$f" "received/$f" && echo "$f 一致"
 done

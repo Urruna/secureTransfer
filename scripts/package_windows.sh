@@ -46,9 +46,18 @@ cmake --build "${BUILD_DIR}" -j8
 
 echo
 echo "=================== 2. 复制可执行文件 ==================="
-rm -rf "${DIST_DIR}"
+# 清空旧目录。
+# ⚠ 在 Windows 上，只要有人把 dist\securityTransfer 当工作目录（典型场景：双击
+#    run_ui.bat / run_bob.bat 留下的 cmd 窗口，或资源管理器停在那个目录），
+#    这个目录本身就会"被占用"，`rm -rf` 会失败并（因为 set -e）让整个打包中断。
+#    这里降级处理：删不掉目录就清空里面的内容，照样原地覆盖，最后给一句提示。
+if ! rm -rf "${DIST_DIR}" 2>/dev/null; then
+    echo "  [WARN] 无法删除旧目录 ${DIST_DIR}（多半是被资源管理器/命令行窗口占用）"
+    echo "         改为原地覆盖；要彻底干净，可先关掉那些窗口再重新打包。"
+    find "${DIST_DIR}" -mindepth 1 -delete 2>/dev/null || true
+fi
 mkdir -p "${DIST_DIR}"
-for exe in alice bob st_ui; do
+for exe in alice bob st_ui eve; do
     cp "${BUILD_DIR}/${exe}.exe" "${DIST_DIR}/"
     echo "  + ${exe}.exe"
 done
@@ -193,8 +202,9 @@ SecureTransfer（Windows 发布包）
 
 内容
 ----
-  alice.exe / bob.exe      命令行客户端与服务端
+    alice.exe / bob.exe      命令行客户端与服务端
   st_ui.exe                图形界面（Qt5，已带全部 DLL 与插件）
+    eve.exe                  Eve 中间人中继（攻击演示用，见 docs/eve_mitm.md）
   run_bob.bat              启动服务端 Bob（端口 9000）
   run_alice.bat            启动客户端 Alice（连 127.0.0.1:9000）
   run_ui.bat               启动图形界面

@@ -17,6 +17,7 @@
 #include <QString>
 #include <QVector>
 
+#include "mitm_controller.h"
 #include "session_worker.h"
 
 class QComboBox;
@@ -28,11 +29,16 @@ class QProgressBar;
 class QPushButton;
 class QScrollArea;
 class QSpinBox;
+class QTableWidget;
+class QTabWidget;
 class QTextEdit;
 class QTimer;
 
 /// 握手共 7 步（与 security/session.h 的 onHandshakeStep 回调一致）
 inline constexpr int kHandshakeSteps = 7;
+
+/// 内核 RejectGate 的关卡数（①帧 ②格式 ③SessionId ④方向 ⑤类型 ⑥重放 ⑦CMAC ⑧状态机）
+inline constexpr int kRejectGates = 8;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -55,6 +61,10 @@ public:
         QVector<QPair<QString, QString>> actions;  ///< ("text"/"file"/"image"/"cmd", 参数)
         QString geometry;                          ///< "宽x高"：强制窗口尺寸（例如 940x600）
         bool printGeometry = false;                ///< 打印各控件实际尺寸后退出（排查布局问题）
+        bool startRelay = false;                   ///< --relay：启动界面时就把 Eve 中继拉起来
+        int relayListen = 9400;                    ///< --relay-listen：中继监听端口
+        int relayTarget = 9000;                    ///< --relay-target：中继转发到的真实服务端端口
+        bool scenario = false;                     ///< --scenario：自动跑"一键攻击剧本"
     };
 
     explicit MainWindow(QWidget* parent = nullptr);
@@ -94,6 +104,30 @@ private slots:
     /// 握手进度（0 = 未开始，1..7 = 已完成到第几步）
     void setHandshakeStep(int step);
 
+    // ---- Eve 攻击面板（U1–U5、U7）----
+    /// [发起攻击]：按当前"来源 + 方式 + 第 N 个包"发起一次攻击
+    void onLaunchAttack();
+    /// [重新建立会话]：攻击必然终止会话，这里一键重连
+    void onReconnectClicked();
+    /// [一键攻击剧本]：篡改 → 重放 → 丢弃，自动归档到攻击历史
+    void onScenarioClicked();
+    /// 攻击"来源"变化：端点视角只支持篡改/重放；中间人支持四种
+    void onAttackSourceChanged();
+    /// [启动中继] / [停止中继]
+    void onRelayStart();
+    void onRelayStop();
+    void onRelayLog(const QString& line);
+    void onRelayPacket(const MitmPacketInfo& packet);
+    void onRelayAttack(const QString& kind, const QString& direction, const QString& index,
+                       const QString& result);
+    void onRelayStats(quint64 forwarded, quint64 tampered, quint64 dropped, quint64 delayed,
+                      quint64 replayed);
+    void onRelayState(const QString& state, const QString& detail);
+    /// [导出 CSV]：把攻击历史写成 CSV
+    void onExportHistory();
+    /// 高亮 8 关流水线里命中的那一关（gate: 1..8，0 = 清空）
+    void highlightRejectGate(int gate);
+
 private:
     /// 一条日志（级别用于着色与过滤）
     struct LogEntry {
@@ -105,8 +139,19 @@ private:
     QWidget* buildLeftColumn();
     QWidget* buildCenterColumn();
     QWidget* buildRightColumn();
+    /// Eve 攻击卡片：三个页签（攻击 / 中间人 / 历史）
+    QWidget* buildEveCard();
     void buildAdvancedDialog();
     void connectSignals();
+    /// 往攻击历史表里追加一行
+    void appendAttackHistory(const QString& source, const QString& kind, const QString& detail,
+                             const QString& gate, const QString& result);
+    /// 启动中继（用卡片上的端口设置）；返回是否成功
+    bool startRelayFromUi();
+    /// 剧本状态机的一个步骤
+    void runScenarioStep();
+    /// 刷新"目标"行的说明（序号语义 + 当前计数 + 正在等什么）
+    void updateAttackTargetHint();
 
     UiConfig collectConfig() const;
     QString resolvePath(const QString& relative, const QString& directory) const;
@@ -156,6 +201,42 @@ private:
     // ---- Eve 攻击面板 ----
     QLabel* attackResultLabel_ = nullptr;
     QString lastAttackAction_;
+    QTabWidget* eveTabs_ = nullptr;
+    QComboBox* attackSourceBox_ = nullptr;   ///< 端点视角 / 中间人（Eve 中继）
+    QComboBox* attackKindBox_ = nullptr;     ///< 篡改 / 重放 / 丢弃 / 延迟
+    QComboBox* attackTargetBox_ = nullptr;   ///< 打哪一类包（下一条短消息 / 最近一条 / 第 N 个…）
+    QSpinBox* attackIndexSpin_ = nullptr;    ///< 仅"指定第 N 个包"时启用
+    QLabel* attackTargetHint_ = nullptr;     ///< 序号语义说明 + "已经在等什么"
+    QPushButton* launchAttackButton_ = nullptr;
+    QPushButton* reconnectButton_ = nullptr;
+    QPushButton* scenarioButton_ = nullptr;
+    QLabel* gateChips_[kRejectGates] = {};   ///< ①…⑧ 八关流水线（命中即高亮）
+    QPlainTextEdit* packetInspectEdit_ = nullptr;  ///< 数据包检查器（Eve 视角）
+    QLabel* attackerViewLabel_ = nullptr;    ///< "Eve 只能确认已注入"的边界说明
+
+    // ---- 中间人链路（独立进程 eve.exe）----
+    QPushButton* relayStartButton_ = nullptr;
+    QPushButton* relayStopButton_ = nullptr;
+    QSpinBox* relayListenSpin_ = nullptr;
+    QSpinBox* relayTargetSpin_ = nullptr;
+    QLabel* relayStateLabel_ = nullptr;
+    QLabel* relayTopologyLabel_ = nullptr;
+    QLabel* relayProgressLabel_ = nullptr;   ///< 实时包计数（C2S/S2C 各多少个）
+    QLabel* relayCounterLabel_ = nullptr;
+    QPlainTextEdit* relayLogEdit_ = nullptr;
+    MitmController* mitm_ = nullptr;
+    int c2sPacketCount_ = 0;                 ///< 中继已转发的 C2S 包数（界面侧统计，用于序号校验）
+    int c2sDataCount_ = 0;                   ///< 其中 DATA（短消息）条数
+    int s2cPacketCount_ = 0;                 ///< 中继已转发的 S2C 包数
+
+    // ---- 攻击历史（U3）----
+    QTableWidget* attackHistory_ = nullptr;
+    QPushButton* exportHistoryButton_ = nullptr;
+    int scenarioStep_ = 0;          ///< 一键剧本的当前步骤（0 = 未在跑）
+    QString scenarioAttackKind_;
+    bool scenarioWaitingForRelay_ = false;    ///< 剧本正在等中继真正 LISTEN
+    bool scenarioWaitingForSession_ = false;  ///< 剧本正在等会话建立
+    bool pendingReconnectAfterRelay_ = false; ///< 手动"重新建立会话"正在等中继 LISTEN
 
     // ---- 日志过滤 / 导出 ----
     QComboBox* logLevelBox_ = nullptr;
@@ -200,8 +281,6 @@ private:
     // ---- 访问控制与攻击演示 ----
     QPushButton* whoamiButton_ = nullptr;
     QPushButton* viewLogButton_ = nullptr;
-    QPushButton* tamperButton_ = nullptr;
-    QPushButton* replayButton_ = nullptr;
 
     QPlainTextEdit* logEdit_ = nullptr;
     QScrollArea* leftScroll_ = nullptr;  ///< 左列的滚动区（小窗口时可滚动，不挤压控件）

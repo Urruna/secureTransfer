@@ -29,6 +29,9 @@ configs/keys.conf
 # 报告里引用的日志片段已经抄进 docs/*.md）
 experiment_data/received*/
 experiment_data/access_log*.txt
+# 攻击演示的运行产物：中继原始日志与受害端留档（每次演示/测试都会重新生成）
+experiment_data/attack_log.txt
+experiment_data/relay_log.txt
 
 # Windows 侧可能出现的构建产物与 IDE 文件
 out/

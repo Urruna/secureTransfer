@@ -1,7 +1,9 @@
 # 测试报告（第二部分：安全通信协议与网络）
 
-执行日期：2026-09-26
-执行环境：VMware Workstation 17 虚拟机 `Ubuntu6.21`
+首次执行：2026-09-26（Linux 虚拟机 `Ubuntu6.21`）
+**最后更新：2026-10-12** —— 现已在 **Windows（MSYS2 MinGW-w64）与 Ubuntu 20.04 两端**
+各跑一遍，测试程序从 14 个增加到 **18 个**（新增 `test_reject_gate`、`test_mitm` 等）。
+下表保留首次执行的环境，Windows 侧环境见 [`development.md`](development.md) §1。
 
 | 项目 | 实测值 |
 | --- | --- |
@@ -18,9 +20,9 @@
 ## 1. 结论摘要
 
 * 编译：`-Wall -Wextra` 下**无警告、无错误**；
-* `ctest`：**16 个测试程序全部通过**（合计 80+ 个用例），总耗时 1.02 秒；
+* `ctest`：**18 个测试程序全部通过**，Windows 与 Ubuntu 两端一致（0 编译告警）；
 * 端到端：Alice 与 Bob 通过真实 TCP 完成「握手 → 4 条消息 → 双向确认 → CLOSE」，双方退出码均为 0；
-* 攻击测试：**篡改、身份伪造、数据包重放、窃听**四项全部按预期被阻止 / 无泄漏；
+* 攻击测试：**篡改、身份伪造、数据包重放、窃听、链路中间人**五项全部按预期被阻止 / 无泄漏；
 * 密码算法：**AES-128 与 CMAC 均为第一部分自实现，且已用标准向量验证**
   （FIPS-197、NIST SP 800-38A、RFC 4493），完整性保护具备真实密码学强度。
 
@@ -38,24 +40,14 @@ ctest --output-on-failure
 ## 3. ctest 实测结果
 
 ```text
-Test project /home/securityTransfer/build
-      Start  1: test_frame              Passed    0.01 sec
-      Start  2: test_network            Passed    0.33 sec
-      Start  3: test_tcp_roundtrip      Passed    0.03 sec
-      Start  4: test_aes_cmac           Passed    0.04 sec
-      Start  5: test_packet             Passed    0.02 sec
-      Start  6: test_transcript         Passed    0.00 sec
-      Start  7: test_replay_guard       Passed    0.00 sec
-      Start  8: test_session_state      Passed    0.00 sec
-      Start  9: test_transfer_meta      Passed    0.01 sec
-      Start 10: test_secure_roundtrip   Passed    0.10 sec
-      Start 11: test_file_transfer      Passed    0.20 sec
-      Start 12: test_tamper             Passed    0.05 sec
-      Start 13: test_forge              Passed    0.01 sec
-      Start 14: test_replay             Passed    0.14 sec
+Test project .../build-win            （Ubuntu 侧同样 18/18）
+   1: test_frame             6: test_transcript      11: test_reject_gate      16: test_forge
+   2: test_network           7: test_replay_guard    12: test_secure_roundtrip 17: test_replay
+   3: test_tcp_roundtrip     8: test_session_state   13: test_file_transfer    18: test_mitm
+   4: test_aes_cmac          9: test_transfer_meta   14: test_access_control_e2e
+   5: test_packet           10: test_access_control  15: test_tamper
 
-100% tests passed, 0 tests failed out of 16
-Total Test time (real) =   1.02 sec
+100% tests passed, 0 tests failed out of 18
 ```
 
 ### 3.1 各测试程序覆盖的内容
@@ -70,6 +62,8 @@ Total Test time (real) =   1.02 sec
 | `test_transcript`（8 例） | 第二部分 | 确定性、域分离、方向分离、TLV 消除歧义、Nonce 绑定、包裹内容绑定 |
 | `test_replay_guard`（7 例） | 第二部分 | 严格递增、重复拒绝、回退拒绝、跳号、`wouldAccept` 不推进水位 |
 | `test_session_state`（9 例） | 第二部分 | 状态机边界、未认证不可收发、无 K_master 拒绝、密钥配置解析 |
+| `test_reject_gate`（4 例） | 第二部分 | 篡改 ⇒ `kMac`、重放 ⇒ `kReplay`、改 SessionId ⇒ `kSessionId`、连续两次拒绝不读陈旧值（"倒在哪一关"的精确记录） |
+| `test_mitm`（7 例） | 第二部分安全 | **独立进程中间人**：纯中继下会话照常建立；篡改 ⇒ ⑦、重放 ⇒ ⑥、丢弃 ⇒ 只能超时（可用性防不住）；"按类型 / 最近一条"选包；**序号过期必须立刻报错** |
 | `test_transfer_meta`（9 例） | 第三部分 | CRC32 已知值与分块累积、元数据编解码、非法文件名（目录穿越）拒绝、单包模式、接收器的正常 / 篡改 / 单包 / 非传输消息四种场景 |
 | `test_file_transfer`（1 例，含 3 条传输路径） | 第三部分 | 真实 TCP + 握手 + 文本 + 300 KB 文件（分块）+ 40 KB 小图像（单包）+ 2 MB 大图像（分块），逐字节比对与 CRC32 一致 |
 | `test_access_control`（8 例） | 第三部分 | 策略解析、判定矩阵（管理员/普通用户/访客/未登记身份）、默认拒绝、非法策略拒绝、消息类型→操作映射、审计记录与写文件 |
@@ -228,19 +222,10 @@ alice / C-]X / wf[6 / dPb$ / C-]X / df2X / kf8? ...
 ## 6. 尚未覆盖 / 未验证的部分
 
 * **长时间稳定性 / 高并发**：当前设计是单会话、单线程，未做压力测试；
-* **文件与图像传输**：协议类型已预留，第三部分实现后需要补充对应的传输测试。
-
-> 与库的性能对比、跨主机的网络测试已单独成文，见下面的 §8。
-
-## 8. 专项报告
-
-| 主题 | 文档 | 覆盖内容 |
-| --- | --- | --- |
-| 密码算法性能对比（要求 5） | **`docs/performance.md`** | AES-CTR 与 CMAC，自实现 vs OpenSSL，1 KB / 64 KB / 1 MB / 10 MB / 100 MB；含禁用 AES-NI 的纯软件对比与正确性交叉验证 |
-| 局域网双机通信（要求 6） | **`docs/lan_test.md`** | 两台独立主机（独立 IP 栈）经以太网链路的握手、数据传输、ARP 与 TCP 抓包证据；真机双机的复现步骤 |
-| **文件与图像传输（要求 9）** | **`docs/file_transfer.md`** | 分块 / 单包两条路径、正文格式、实验数据说明、4 个文件（64 KB、1 MB、147 KB 图像、2.2 MB 图像）的耗时与吞吐、逐字节一致与 sha256 对照 |
-| **访问控制（要求 7）** | **`docs/access_control.md`** | 策略配置、判定流程、用户透明性（内置命令）、管理员 vs 访客的实测输出、审计日志样例、局限说明 |
-| **图形界面（要求 8）** | **`docs/ui.md`** + `docs/screenshots/` | 方案选择（Qt5）、界面分区、线程模型、两个场景的实测结果、界面截图、已知限制 |
+* **真机双机（两台物理主机）**：已完成的是 Linux netns 两个独立 IP 栈、
+  以及 Windows ↔ Ubuntu 跨系统；真机命令见 [`lan_test.md`](lan_test.md) §4；
+* **可用性攻击**：丢弃 / 延迟**无法防御**（中继实测只能观察到超时），
+  见 [`eve_mitm.md`](eve_mitm.md) §5 —— 这是设计限制，不是漏测。
 
 ## 7. 与第一部分的衔接
 
@@ -256,3 +241,16 @@ alice / C-]X / wf[6 / dPb$ / C-]X / df2X / kf8? ...
 
 接入后，协议层的篡改测试（§5.1）从"协议流程正确"升级为**真实的密码学保证**：
 修改任何一个密文字节，CMAC 校验必然失败。
+
+## 8. 专项报告
+
+| 主题 | 文档 | 覆盖内容 |
+| --- | --- | --- |
+| 密码算法性能对比（要求 5） | [`performance.md`](performance.md) | AES-CTR 与 CMAC，自实现 vs **OpenSSL / Mbed TLS / Botan**，1 KB~100 MB；含"禁用硬件加速的纯软件对照"与四方正确性交叉验证 |
+| 局域网双机通信（要求 6） | [`lan_test.md`](lan_test.md) | 两个独立 IP 栈经以太网链路的握手与数据传输、ARP 与 TCP 抓包证据；真机双机的复现步骤 |
+| 窃听证据 | [`eavesdrop.md`](eavesdrop.md) | Windows + tshark 跨机抓包：75 帧、明文/密钥 **0 命中** |
+| **中间人攻击（独立进程）** | [`eve_mitm.md`](eve_mitm.md) | 纯中继下会话照常建立；篡改 ⇒ ⑦、重放 ⇒ ⑥、丢弃 ⇒ 只能超时；攻击者视角的边界 |
+| **文件与图像传输（要求 9）** | [`file_transfer.md`](file_transfer.md) | 分块 / 单包两条路径、正文格式、4 个文件的耗时与吞吐、逐字节一致与 sha256 对照 |
+| **访问控制（要求 7）** | [`access_control.md`](access_control.md) | 策略配置、判定流程、用户透明性、管理员 vs 访客实测、审计日志样例、局限说明 |
+| **图形界面（要求 8）** | [`ui.md`](ui.md) + [`screenshots/`](screenshots/README.md) | 方案选择（Qt5）、三栏布局、线程模型、改版与修复记录、截图、已知限制 |
+| **课程要求逐条对照** | [`requirements.md`](requirements.md) | 十条评分点 → 实现要点 / 代码位置 / 证据 / 测试（唯一权威） |

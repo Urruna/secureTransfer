@@ -12,14 +12,24 @@ rem        run_ui_build.bat --help
 rem ============================================================================
 chcp 65001 >nul
 setlocal
-set "MSYS_BIN=D:\AppGallery\dev-tools\msys64\mingw64\bin"
 set "PROJECT_DIR=%~dp0"
 
-if not exist "%MSYS_BIN%\Qt5Core.dll" (
-    echo [警告] 找不到 %MSYS_BIN%\Qt5Core.dll
-    echo        如果程序报 0xC0000135，请确认 MSYS2 的 qt5 已安装：
-    echo        pacman -S mingw-w64-x86_64-qt5
+rem ---- 自动探测 MSYS2 的 mingw64（不再写死某一台机器的路径）----
+rem  优先级：环境变量 MSYS2_ROOT → 本项目常用位置 → 默认安装位置
+set "MSYS_ROOT="
+if defined MSYS2_ROOT if exist "%MSYS2_ROOT%\mingw64\bin\Qt5Core.dll" set "MSYS_ROOT=%MSYS2_ROOT%"
+if not defined MSYS_ROOT if exist "D:\AppGallery\dev-tools\msys64\mingw64\bin\Qt5Core.dll" set "MSYS_ROOT=D:\AppGallery\dev-tools\msys64"
+if not defined MSYS_ROOT if exist "C:\msys64\mingw64\bin\Qt5Core.dll" set "MSYS_ROOT=C:\msys64"
+if not defined MSYS_ROOT if exist "%USERPROFILE%\msys64\mingw64\bin\Qt5Core.dll" set "MSYS_ROOT=%USERPROFILE%\msys64"
+if not defined MSYS_ROOT (
+    echo [错误] 没找到 MSYS2 的 mingw64（缺 Qt5Core.dll）。
+    echo        可以设一个环境变量 MSYS2_ROOT 指向 msys64 目录，例如：
+    echo            set MSYS2_ROOT=D:\AppGallery\dev-tools\msys64
+    echo        若还没装 Qt5：pacman -S mingw-w64-x86_64-qt5
+    pause
+    exit /b 1
 )
+set "MSYS_BIN=%MSYS_ROOT%\mingw64\bin"
 set "PATH=%MSYS_BIN%;%PATH%"
 
 cd /d "%PROJECT_DIR%"

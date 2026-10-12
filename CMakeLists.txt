@@ -94,6 +94,7 @@ target_link_libraries(st_security PUBLIC st_protocol)
 #   * 只新增"分块重组 + 整文件 CRC32 校验"这一层应用逻辑
 # ---------------------------------------------------------------------------
 add_library(st_application STATIC
+        src/attack/mitm_relay.cpp
         src/application/transfer_meta.cpp
         src/application/file_transfer.cpp)
 target_link_libraries(st_application PUBLIC st_security)
@@ -108,6 +109,16 @@ add_executable(alice apps/alice/main.cpp)
 target_link_libraries(alice PRIVATE st_application)
 
 # ---------------------------------------------------------------------------
+# Eve 中间人中继（第三部分攻击演示：真实链路中间人）
+#   * 独立进程，坐在 Alice 与 Bob 的 TCP 链路中间，可转发 / 篡改 / 丢弃 / 延迟 / 重放
+#   * 不含任何密钥，也不实现任何密码学逻辑：只复用 Frame / Packet 做"看得见的解析"
+# ---------------------------------------------------------------------------
+add_executable(eve apps/eve/main.cpp)
+# 中继核心用两条线程做双工转发，Linux 下需要显式链 pthread（Windows 上无此概念）。
+find_package(Threads REQUIRED)
+target_link_libraries(eve PRIVATE st_application Threads::Threads)
+
+# ---------------------------------------------------------------------------
 # 图形界面（第三部分，课程要求 8）
 #   * 只有装好 Qt5（qtbase5-dev）时才会构建；没装则自动跳过，不影响其它目标
 #   * 界面本身不实现任何密码学逻辑，只调用已有的安全会话 / 文件传输 / 访问控制
@@ -118,6 +129,7 @@ if(Qt5_FOUND)
     add_executable(st_ui
             apps/ui/main.cpp
             apps/ui/main_window.cpp
+            apps/ui/mitm_controller.cpp
             apps/ui/session_worker.cpp)
     set_target_properties(st_ui PROPERTIES AUTOMOC ON)
     target_include_directories(st_ui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps/ui)

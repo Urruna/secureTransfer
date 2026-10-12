@@ -52,3 +52,5 @@ st_add_test(test_access_control_e2e integration/test_access_control.cpp)
 st_add_test(test_tamper integration/test_tamper.cpp)
 st_add_test(test_forge integration/test_forge.cpp)
 st_add_test(test_replay integration/test_replay.cpp)
+# 链路中间人：不再由端点"自己改自己的发送路径"，而是独立的转发者（第三部分 Eve）
+st_add_test(test_mitm integration/test_mitm.cpp)

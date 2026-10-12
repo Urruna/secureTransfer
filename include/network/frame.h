@@ -2,10 +2,9 @@
 //  SecureTransfer - 第一阶段：基础 TCP 通信
 //  file: include/network/frame.h
 //
-//  说明：Frame 是网络层传输数据的最小单元。
-//        当前阶段只包含 length + payload 两个字段；
-//        后续安全协议阶段会在其上扩展 Message Type / Session ID /
-//        Sequence Number / Nonce / MAC 等字段（见 docs/protocol.md）。
+//  说明：Frame 是网络层传输数据的最小单元，只有 length + payload 两个字段。
+//        安全协议阶段**没有改动本文件**：Packet（Type / SessionId / Sequence /
+//        Nonce / Body / MAC）整体放在 Frame::payload 内部，见 docs/protocol.md。
 // ============================================================================
 
 #ifndef SECURETRANSFER_NETWORK_FRAME_H

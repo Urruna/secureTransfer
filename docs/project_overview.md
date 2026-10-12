@@ -1,9 +1,9 @@
 # SecureTransfer 项目全景梳理
 
 > **用途**：整体回顾、答辩准备、对外介绍的一页式入口。
-> **生成日期**：2026-10-06
+> **最后核对**：2026-10-12
 > **依据**：直接阅读源码（`src/` `include/` `apps/` `tests/`）+ 核实 `docs/` 全部文档，
-> 不是对 README 的复述。**核实到的文档过时点在附录 C 列出**。
+> 不是对 README 的复述。上一版列出的 10 处"文档/注释过时点"已全部修完并删除该清单。
 
 ---
 
@@ -16,10 +16,11 @@
 | 技术栈 | C++17 + CMake；Qt 5 Widgets（界面，可选）；MSYS2 MinGW-w64 或 g++ |
 | 密码算法 | **自己手写 AES-128-CTR + CMAC**（RFC 4493）。系统本体**不链接任何密码库** |
 | 唯一例外 | `tools/crypto_benchmark` 链接 OpenSSL —— 只为做"要求 5 的性能对比" |
-| 代码规模 | `src/` + `include/` **6067 行**；`apps/` 2331 行；`tests/` 3711 行；`tools/` 459 行 |
-| 测试 | `ctest` **16/16 通过**（80+ 用例），Linux 与 Windows 两端一致 |
-| 当前状态 | 课程要求 1–9 **全部实现并实测**；要求 10 部分达成 |
-| 运行环境 | Ubuntu 20.04 虚拟机（Linux netns 模拟双机）+ Windows 物理机（MSYS2 / Qt 5.15.19） |
+| 代码规模 | `src/` + `include/` **6825 行**；`apps/` 4779 行；`tests/` 4191 行；`tools/` 764 行 |
+| 测试 | `ctest` **18/18 通过**，Linux 与 Windows 两端一致（0 编译告警） |
+| 攻击演示 | 端点视角（本端构造攻击包）+ **真实链路中间人**（独立进程 `eve.exe`：篡改/重放/丢弃/延迟） |
+| 当前状态 | 课程要求 1–9 **全部实现并实测**；要求 10 部分达成（详见 [`requirements.md`](requirements.md)） |
+| 运行环境 | Windows 物理机（MSYS2 MinGW-w64 / Qt 5.15.19，主力）+ Ubuntu 20.04 虚拟机（g++ 9.4 / Qt 5.12.8） |
 
 **一句话定位**：这不是"调库拼一个加密聊天"，而是**从 AES 的 S 盒开始手写、一路搭到 Qt 图形界面的完整协议栈**，
 每一层都有明确边界、可替换接缝和独立测试。
@@ -28,42 +29,15 @@
 
 ## 1. 课程要求完成情况
 
-### 1.1 十条评分点
+> **完整对照表在 [`requirements.md`](requirements.md)** —— 那里是唯一出处：十条评分点逐条给出
+> 实现要点 / 代码位置 / 证据文档 / 测试，另含课程流程要求、自行确定的技术方案、尚未实现的清单。
+> 本节只留结论，避免同一张表在多处各写一遍、逐渐对不上（2026-10-12 已合并重复表格）。
 
-| 编号 | 课程要求 | 分值 | 状态 | 证据位置 |
-| --- | --- | --- | --- | --- |
-| 1 | 安全分发会话密钥 `K_session = 000102…0F` | 10 | ✅ | `KEY_EXCHANGE` 用 `K_master` 做 CTR 包裹后**真的传输**；`docs/protocol.md` §4–§5 |
-| 2 | 用该密钥 + AES 加密传输，≥4 条测试消息 | 10 | ✅ | AES-128-CTR；4 条消息（10B / 39B / 75B / 85B）端到端验证 |
-| 3 | 完整性保护 + 标准数据做算法正确性测试 | 10 | ✅ | CMAC（RFC 4493，4 条标准向量）；FIPS-197 / NIST SP 800-38A |
-| 4 | 必须自己写，不能用库 | 10 | ✅ | 本体零密码库依赖；`aes.cpp` / `cmac.cpp` 自写 |
-| 5 | 与库/他人实现做性能对比 | 10 | ✅ | AES-CTR + CMAC × 1KB~100MB，含**禁用 AES-NI 的纯软件对比**；`docs/performance.md` |
-| 6 | 信息必须经过网络传输 | 10 | ✅ | 真实 TCP；netns 双机 + Windows↔Ubuntu 跨系统双机；`docs/lan_test.md` |
-| 7 | 完整安全协议（加密/认证/密钥交换/访问控制），对用户透明 | 10 | ✅ | 全部四项完成；访问控制见 `docs/access_control.md` |
-| 8 | 良好人机交互界面 + 需求分析 + 应用设计 | 10 | ✅ | Qt5 界面（8 个分区 + `--auto` 脚本化）；`docs/ui.md` |
-| 9 | 支持短消息 / 文件 / 图像多种信息 | 10 | ✅ | `DATA` + `FILE_*` 分块 64 KiB + `IMAGE` 单包；`docs/file_transfer.md` |
-| 10 | 其他扩充功能 | 10 | 🟡 部分 | 协议统计、密钥指纹、`--mock`/`--placeholder`、Eve 攻击测试、性能工具、双机脚本、CI 自动出包 |
-
-### 1.2 课程流程要求
-
-| 要求 | 落实方式 |
-| --- | --- |
-| 先用 TCP 建连，再做认证与会话建立 | `connectToServer()` / `acceptOneClient()` 内部顺序完成，TCP 成功后才进入握手 |
-| Challenge-Response 认证，Nonce 防重放 | `NonceA` / `NonceB` 均进入转录串；Bob 每次连接生成新 `NonceB` |
-| Encrypt-then-MAC | 数据阶段先 `aesCtrEncrypt` 再对「头部+密文」算 CMAC |
-| 统一 Packet 格式 | 与课程建议格式一致，**另加 1 字节 `Direction`** 防反射 |
-| Sequence + SessionId 防重放 | `ReplayGuard` 两阶段 + SessionId 绑定校验 |
-| Eve 攻击演示（窃听/篡改/伪造/重放） | 四条路径全部有实测证据 |
-| 访问控制 | 身份→角色→权限，服务端权威判定 + 审计日志 |
-
-### 1.3 未实现 / 明确限制（项目主动写明，是加分项）
-
-| 项 | 现状 | 原因 |
-| --- | --- | --- |
-| 前向保密 | ❌ 不支持 | 要求 1 规定会话密钥是**固定值**，结构上做不到。改点在 `makeCourseSessionKey()` |
-| 抗 DoS | ❌ 未设计 | 握手入口敞开（未认证的 HELLO 也会被处理）；但**数据通道防住了**（两阶段提交） |
-| 多客户端并发 / 密钥轮换 | ❌ | 单会话、单线程模型 |
-| 每身份独立凭证 | ❌ | 所有身份共用一把 `K_master`（实验环境简化） |
-| 真机双机（两台物理机） | 🟡 命令就绪 | netns 模拟已完成；Windows↔Ubuntu 属"宿主↔虚拟机" |
+**结论**：课程要求 **1–9 全部实现并实测**，每一条都有"代码 + 文档 + 测试"三重证据；
+**要求 10（扩充功能）部分达成** —— 已有真实链路中间人攻击工具、攻击拦截关卡与回执、
+CI 自动测试与自动出包、Windows 免环境发布包、Wireshark 抓包脚本等。
+做不到或尚未做的（前向保密、抗 DoS、抗丢弃/延迟、每身份独立凭证）在
+[`requirements.md`](requirements.md) §4 如实列出，答辩时可直接引用。
 
 ---
 
@@ -429,154 +403,27 @@ DATA / FILE_* / IMAGE  →  映射为受保护操作  →  按对端身份的角
 
 ## 6. Qt 图形界面
 
-### 6.1 技术选型
+> 界面专项文档：**[`ui.md`](ui.md)**（方案选择、需求分析、线程模型、界面分区、截图，
+> 以及 2026-10-09 改版、2026-10-10 Eve 面板升级、2026-10-12 反馈修复都在那里）。
+> 本文件不再重复一遍。
 
-| 项 | 内容 |
+三条结构性要点（要求 4 的保证）：
+
+1. **界面不实现任何密码学逻辑**：只调用 `SecureSession` / `FileSender` / `AccessController`；
+2. **安全会话跑在工作线程**：GUI 只画界面，通过加锁队列下命令，结果用 Qt 信号跨线程回传；
+3. **可脚本化**：`--auto` / `--scenario` / `--relay` 让演示、截图与攻击测试无需人工点击。
+
+## 7. 界面与发布包怎么拿到
+
+| 场景 | 做法 |
 | --- | --- |
-| 技术栈 | Qt 5 Widgets（C++），Linux 侧 Qt 5.12 / Windows 侧 Qt 5.15.19 |
-| 与内核关系 | **同一进程**，直接调用 `SecureSession` / `FileSender` / `AccessController` |
-| 代码量 | 3 个源文件约 1440 行 |
-| 界面语言 | 中文（通用术语保留英文，如 SessionId / CRC32 / IMAGE） |
+| Windows 本机开发（主力） | 双击 `run_ui_build.bat`（自动探测 MSYS2 路径） |
+| Linux / 虚拟机开发 | `cmake --build build && ./build/st_ui`（需 Qt5 开发包） |
+| 给别人用（对方免环境） | `bash scripts/package_windows.sh` → `dist/securityTransfer/`（含 `run_ui.bat`） |
+| 从 GitHub 获取 | Release 附件 `securityTransfer-ui-win64.zip`，或 `scripts/get_ui.ps1` 一键下载（[`release_notes.md`](release_notes.md)） |
 
-### 6.2 需求分析（界面要解决什么）
-
-课程要求"使安全操作尽量对用户透明"，所以界面解决三件事：
-
-1. **用户不需要敲命令** —— 连接对象、端口、身份、策略都能在界面上选；
-2. **安全过程可见但不需要理解** —— 握手每一步、SessionId、算法、角色权限、收发统计自动显示，
-   用户只看到"已建立安全会话 / 已安全发送"；
-3. **能演示与验证** —— 文件/图像传输有进度与校验结果，攻击演示有一键按钮，越权时给出明确原因。
-
-### 6.3 线程模型（关键设计）
-
-```text
-GUI 线程                                    工作线程（独占 SecureSession）
-────────                                   ──────────────────────────────
-画界面                                      循环：
-  │  点击"发送"                                 ① 取命令队列（加锁）
-  │  ── request*() 塞进加锁队列 ──────────────▶  ② tryReceiveMessage(type, body, 100)
-  │                                              ③ 结果用 Qt 信号发回
-  ◀──────── 信号（自动跨线程排队）──────────────┘
-```
-
-- `SecureSession::receiveMessage()` 是**阻塞**的，直接放 GUI 线程会卡死界面；
-- 所以工作线程独占 `SecureSession`（该对象**不是线程安全的**）；
-- `tryReceiveMessage()` 内部用 `select()` 等"可读"，**数据一到立刻返回** ——
-  消息显示延迟不受那个 100 ms 影响；100 ms 只是"没数据时最多隔多久再回头看一眼命令队列"。
-
-> **这一块踩过坑（值得写进复盘）**：早期版本用"250 ms 超时接收 + 把超时当没有数据"，
-> 后果是①消息最多晚 250 ms 显示 ②空闲时每 250 ms 打一行 ERROR 日志（几秒几百行）。
-> 修好后实测：客户端日志从 **352 行降到 11 行、超时行 0 条**。
-
-### 6.4 界面分区（8 块）
-
-| 区域 | 控件 | 作用 |
-| --- | --- | --- |
-| 1. 连接与身份 | 角色 / 对端地址 / 端口 / 本端身份 / 对端身份 / 密钥配置 / 访问策略 / 接收目录 / 审计日志 / [启动] [断开] | 一个界面既能当 Alice 也能当 Bob |
-| 2. 安全会话状态 | 状态灯 + SessionId + NonceA/B + 我的角色与权限 | 会话是否建立一目了然 |
-| 3. 统计与访问控制 | 收发统计 + [查询我的角色] [查看审计日志] | 对应 `CMD WHOAMI` / `CMD VIEW_LOG` |
-| 4. 短消息 | 历史记录 + 输入框 + [发送] | 明文输入，加密在后台完成 |
-| 5. 文件 / 图像传输 | [选择文件…] [选择图像…] + 进度条 + 结果标签 | 显示 CRC32 校验结果 |
-| 6. Eve 攻击演示 | [篡改上一个数据包并重发] [原样重放上一个数据包] | 一键验证完整性与防重放 |
-| 7. 运行日志 | 滚动日志 | 握手每一步、访问控制判定、传输细节 |
-
-### 6.5 界面与安全内核解耦（要求 4 的结构性保证）
-
-界面代码里**搜 `crypto|AES|CMAC|Packet|Nonce` 零匹配** —— 这是编译期就能验证的结构性保证，
-不是靠"我们注意没写"。
-
----
-
-## 7. UI 如何部署
-
-四条路径，按"使用者的身份"选。
-
-### 路径 A：Linux 开发运行（原始路线）
-
-```bash
-sudo apt install -y qtbase5-dev            # 一次性，约 100 MB
-cd /home/securityTransfer && mkdir -p build && cd build
-cmake .. && cmake --build . -j4
-ls -l st_ui
-DISPLAY=:0 ./st_ui                          # 需要桌面会话
-```
-
-Qt 不存在时 CMake **自动跳过该目标**，不影响 `alice` / `bob` 与全部测试。
-
-### 路径 B：Windows 开发运行（当前主用）
-
-```bash
-# 在 MSYS2 的 MinGW64 shell 中执行
-cd /d/AppGallery/codex/Urruna_codex_OS/projects/securityTransfer
-cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build-win -j8
-```
-
-两种启动方式：
-
-1. **双击项目根的 `run_ui_build.bat`** —— 它临时把 MSYS2 的 `mingw64\bin` 加进本进程 PATH，
-   不修改系统环境变量，可带参数（`run_ui_build.bat --server --port 9000`）；
-2. **MSYS2 shell 里直接 `./build-win/st_ui.exe`** —— 该 shell 的 PATH 天然含 `/mingw64/bin`。
-
-> ⚠ 直接双击 `build-win\st_ui.exe` 会报 `0xC0000135`（找不到 Qt5Core.dll）；
-> 且**必须从项目根目录启动**（界面按相对 cwd 找 `configs/keys.conf`）。
-> ⚠ `run_ui_build.bat:15` 目前**写死了本机 MSYS2 路径**，别人机器上会失效。
-
-### 路径 C：Windows 免环境分发（给别人用）
-
-```bash
-# 在 MSYS2 MinGW64 shell 中
-bash scripts/package_windows.sh
-```
-
-输出 `dist/securityTransfer/`（**约 75 MB**）：
-
-- `alice.exe` / `bob.exe` / `st_ui.exe`；
-- Qt5 DLL（`windeployqt-qt5` 部署）+ `platforms/qwindows.dll`；
-- MinGW 运行时 DLL（脚本按"依赖传递闭包"自动补齐 `icu*` / `zlib1` / `harfbuzz` / `pcre2` 等）；
-- `configs/`（**只含 `keys.conf.example`，不含真实密钥**）+ `experiment_data/`；
-- 双击即用的 `run_bob.bat` / `run_alice.bat` / `run_ui.bat`。
-
-对方只需：解压 → 把 `keys.conf.example` 复制成 `keys.conf` 并填 `K_master` → 双击 `run_ui.bat`。
-**无需 Qt / MSYS2 / 编译器。**
-
-> `dist/` 已被 `.gitignore` 排除，clone 出来没有可执行文件，需要时重新跑脚本。
-
-### 路径 D：GitHub Release + CI 自动出包
-
-- 工作流 `.github/workflows/windows-ui.yml`：装 MSYS2 + Qt5 → 跑 `package_windows.sh`
-  → 检查依赖完整性 → 打 zip → **Release 时自动挂到该 Release 上**（附 `sha256.txt`）。
-- 平时 push 到 `main` 也会自动构建并上传 artifact（保留 90 天）。
-- 一键获取脚本：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\get_ui.ps1 -Token ghp_xxx
-# 结果：.\dist\securityTransfer\（含 run_ui.bat）
-```
-
-> ⚠ 仓库为**私有**：对方需要是 collaborator 并登录 GitHub 才能下载。
-
-### 四条路径对比
-
-| 路径 | 使用者 | 需要什么 | 产物 |
-| --- | --- | --- | --- |
-| A | 自己（Linux 侧） | `qtbase5-dev` + 桌面会话 | `build/st_ui` |
-| B | 自己（Windows 侧，当前主用） | MSYS2 MinGW-w64 + Qt5 | `build-win/st_ui.exe` |
-| C | 队友 / 老师 | **什么都不用装** | `dist/securityTransfer/`（75 MB） |
-| D | 任何人（需仓库权限） | 只要 GitHub 账号 | Release 的 zip（约 32 MB） |
-
-### 界面自动化（不需要人工点击）
-
-```bash
-./build-win/st_ui.exe --server --auto --port 9820 --out-dir experiment_data/received_ui &
-./build-win/st_ui.exe --client --auto --host 127.0.0.1 --port 9820 \
-    --send-text "Hello from Qt UI on Windows" \
-    --send-file experiment_data/test_file_64KB.bin --cmd WHOAMI
-```
-
-另有 `--geometry 940x600`（复现小窗口布局问题）与 `--print-geometry`（打印各控件实际尺寸）两个诊断开关。
-
----
+布局回归：`st_ui --print-geometry` 会打印每个控件的实际尺寸与"是否被压缩"，
+并逐页签检查换行标签有没有被压成一行高（见 [`ui.md`](ui.md) §14.1）。
 
 ## 8. 未来改进方向
 
@@ -632,12 +479,14 @@ powershell -ExecutionPolicy Bypass -File scripts\get_ui.ps1 -Token ghp_xxx
 
 | 指标 | 数值 | 出处 |
 | --- | --- | --- |
-| `ctest` | **16/16 通过**（80+ 用例），1.02 秒 | `test_report.md` |
+| `ctest` | **18/18 通过**（Windows 与 Ubuntu 两端各一遍） | `test_report.md` |
 | 编译 | `-Wall -Wextra` 下 0 错误 0 警告（Linux + Windows 两端） | 同上 |
 | 4 条测试消息 | 10 B / 39 B / 75 B / 85 B，全部"解密一致，MAC 通过" | 同上 |
 | 篡改攻击 | `rejectedMac=1, rejectedReplay=0` → 精确落在 MAC 关卡 | `test_tamper` |
 | 重放攻击 | `rejectedReplay=1, rejectedMac=0` → 精确落在防重放关卡 | `test_replay` |
 | 伪造攻击 | 错误 `K_master` 过不了认证（双向都拒绝） | `test_forge` |
+| **中间人（独立进程）** | 纯中继下会话照常建立；篡改→⑦ CMAC、重放→⑥ 防重放；丢弃→只能超时（无法防御） | `eve_mitm.md`、`test_mitm` |
+| **攻击拦截关卡** | `RejectGate` 精确记录"倒在哪一关"；受害端回执 `ATTACK-REPORT` 经中继回到攻击端 | `test_reject_gate` |
 | 窃听（Linux tcpdump） | `capture_size=3501`，`plaintext_hits=0` | `test_report.md` |
 | 窃听（Windows tshark 跨机） | 75 帧 / 74308 字节；明文、文件内容、`K_master`、`K_session` **全部 0 命中** | `eavesdrop.md` |
 | netns 双机 | 32 个以太网帧，TCP SYN-SYNACK 完整，明文泄露 0 次 | `lan_test.md` |
@@ -651,39 +500,13 @@ powershell -ExecutionPolicy Bypass -File scripts\get_ui.ps1 -Token ghp_xxx
 
 ## 附录 B：代码规模
 
-| 层 | 目录 | 行数 |
+| 目录 | 内容 | 行数 |
 | --- | --- | --- |
-| 横切 | `common/` | 1092 |
-| 算法 | `crypto/` | 872 |
-| 网络 | `network/` | 1093 |
-| 协议 | `protocol/` | 493 |
-| 安全 | `security/` | 1685 |
-| 应用 | `application/` | 832 |
-| **源码合计** | `src/` + `include/` | **6067** |
-| 入口 | `apps/`（alice 442 + bob 449 + ui 1440） | 2331 |
-| 测试 | `tests/` | 3711 |
-| 工具 | `tools/` | 459 |
-| **总计** | | **约 12568** |
-
-## 附录 C：本次核实到的文档过时点（待修）
-
-以下是**逐个打开源码核实**后确认仍过时的地方（不是猜测）。
-
-| # | 位置 | 问题 | 建议改法 |
-| --- | --- | --- | --- |
-| 1 | `docs/architecture.md:26` | 架构图写「AES 已接入，**CMAC 待交付**」 | CMAC 早已集成且是默认实现 |
-| 2 | `include/crypto/mac_engine.h:8-9` | "当前状态：**CMAC 仍在第一部分开发中**" | 改为"CMAC 已交付，见 `cmac_engine.h`" |
-| 3 | `include/crypto/crypto_provider.h:11` | 列了「**未来的** Part1CryptoProvider」 | 它就是现在的 `CmacEngine`，已接入 |
-| 4 | `include/network/frame.h:6-8` | "后续会**在其上扩展** Message Type / Session ID / Sequence …" | 实际路线是 payload 里套 Packet，**Frame 一字未改**；与同层 `network.h:13-14` 自相矛盾 |
-| 5 | `include/security/session.h:148` | `close()` 注释写「**发送 kClose（尽力而为）**并关闭连接」 | 实现（`session.cpp:668`）**只关连接、一个字节都没发**；真正发 kClose 的是应用层 |
-| 6 | `include/security/session.h:159` | `macIsCryptographicallySecure()` 注释写「CMAC **未交付**时为 false」 | CMAC 已交付 |
-| 7 | `docs/development.md:155` | 出现旧目录名 `cd /home/securityTransfer/**实验数据**` | 已英文化为 `experiment_data` |
-| 8 | `docs/development.md:10` | "第三方依赖：**无**（不需要 OpenSSL / Qt / 网络库）" | Windows 下链接 `ws2_32` / `bcrypt`，Qt 为可选目标 |
-| 9 | `docs/development.md:43-54` | 产物清单缺少 `st_ui` / `crypto_benchmark` / `test_file_transfer` / `test_access_control` 等新目标 | 补全 |
-| 10 | `run_ui_build.bat:15` | 写死 `D:\AppGallery\dev-tools\msys64\mingw64\bin` | 改为自动探测常见安装位置 |
-
-> ✅ **已修**（本次核对确认）：`README.md:5` / `README.md:9`（第三部分状态、测试数）；
-> `src/network/network.cpp:100` 的 `describeError()` 已改用 `FormatMessageW` + UTF-8 转换（提交 `dd54726`）。
+| `src/` + `include/` | 算法 / 网络 / 协议 / 安全 / 应用 / 横切（含 `attack/` 中间人） | **6825** |
+| `apps/` | `alice`、`bob`、`eve`（中间人）、`ui`（Qt） | 4779 |
+| `tests/` | 单元 + 集成，共 18 个测试程序 | 4191 |
+| `tools/` | 性能对比（多后端）与 CMAC 微基准 | 764 |
+| **总计** | | **约 16559** |
 
 ---
 
@@ -703,4 +526,7 @@ powershell -ExecutionPolicy Bypass -File scripts\get_ui.ps1 -Token ghp_xxx
 | 访问控制 | `docs/access_control.md` |
 | 图形界面 | `docs/ui.md` + `docs/screenshots/` |
 | 窃听证据 | `docs/eavesdrop.md` |
-| 每一轮做了什么（决策记录） | `Part2_transfer.md` |
+| 中间人攻击（独立进程） | `docs/eve_mitm.md` |
+| 发布包与下载 | `docs/release_notes.md`、`scripts/get_ui.ps1` |
+| 每一轮做了什么（研发历程与决策记录） | `docs/history_rounds.md`（方案本身在 `Part2_transfer.md`） |
+| 第一阶段的历史文档 | `docs/history_stage1.md` |

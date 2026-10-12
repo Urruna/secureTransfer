@@ -172,7 +172,9 @@ public:
     ///     if (status == kNothing) { /* 处理本线程的其它任务，然后重试 */ }
     ReceiveStatus tryReceiveMessage(MessageType& type, Bytes& plaintext, int waitMs = 0);
 
-    /// 主动结束会话：发送 kClose（尽力而为）并关闭连接。
+    /// 主动结束会话：只关闭连接（**不发送任何报文**）。
+    /// 需要"礼貌告别"时由调用方自己先 sendMessage(kClose, {})：
+    /// 命令行 alice 与图形界面工作线程都是这么做的，对端收到 kClose 后正常收尾。
     void close();
 
     /// 只结束**本次连接**、保留监听 socket（服务端常驻用）：
@@ -192,7 +194,7 @@ public:
     const std::string& lastError() const { return lastError_; }
     std::uint16_t listeningPort() const { return network_.boundPort(); }
 
-    /// MAC 是否具备密码学强度（CMAC 未交付时为 false）。
+    /// MAC 是否具备密码学强度（当前默认的 CMAC 为 true；占位实现为 false）。
     bool macIsCryptographicallySecure() const { return crypto_.macIsCryptographicallySecure(); }
 
     /// 握手使用的两个 Nonce（仅用于演示与测试输出，不是密钥）。

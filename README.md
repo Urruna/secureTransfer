@@ -1,11 +1,10 @@
 # SecureTransfer — 安全的信息传输套件
 
 > 课程项目《安全的信息传输套件》的工程实现。
-> 本仓库当前覆盖 **第一部分（AES 成果的接入与回归）** 与 **第二部分（安全通信协议与网络）**；
-> 第三部分（UI / 文件 / 图像 / 访问控制 / Eve 演示界面）已在
-> `apps/ui/`、`src/application/`、`src/security/access_control.cpp` 中实现并实测；
-> 另外本项目**已从 Linux 运行环境迁移到 Windows**（MSYS2 MinGW-w64），
-> 两端各有一套实测数据（见 `Part2_transfer.md` §23）。
+> 三部分都已落地并在 **Windows（MSYS2 MinGW-w64，主力）与 Ubuntu 20.04** 两端实测：
+> 自写的 AES-128-CTR + CMAC、安全协议与网络层、Qt 图形界面、文件/图像传输、访问控制、
+> Eve 攻击演示（含**独立进程的真实链路中间人**）。
+> **课程要求完成情况以 [`docs/requirements.md`](docs/requirements.md) 为准**。
 
 **验证状态**
 
@@ -19,10 +18,10 @@
 
 | 环境 | 编译 | 测试 | 端到端 | 备注 |
 | --- | --- | --- | --- | --- |
-| Ubuntu 20.04 虚拟机（Ubuntu6.21，g++ 9.4.0） | 0 错误 0 警告 | `ctest` **16/16** | 4 条测试消息 + 4 个文件/图像逐字节一致 | 局域网双机 + 抓包证据；性能对比（OpenSSL 1.1.1） |
-| Windows 主机（MSYS2 MinGW-w64，g++ 16.2.0） | 0 错误 0 警告 | `ctest` **16/16** | 4 条测试消息 + 4 个文件/图像逐字节一致 | 跨系统双机（Windows Alice ↔ Ubuntu Bob，双向）；性能对比（OpenSSL 3.6.5）；Qt 界面（Qt 5.15.19）已编译并跑通一次会话 |
+| Ubuntu 20.04 虚拟机（Ubuntu6.21，g++ 9.4.0 / Qt 5.12.8） | 0 错误 0 警告 | `ctest` **18/18** | 4 条测试消息 + 4 个文件/图像逐字节一致 | 局域网双机 + 抓包证据；性能对比（含 Mbed TLS / Botan） |
+| Windows 主机（MSYS2 MinGW-w64，g++ 16.2.0 / Qt 5.15.19） | 0 错误 0 警告 | `ctest` **18/18** | 4 条测试消息 + 4 个文件/图像逐字节一致 | 跨系统双机（双向）；性能对比（OpenSSL 3.6.5）；Qt 界面与中间人演示 |
 
-篡改 / 伪造 / 重放 / 窃听四项安全测试在两端全部通过；
+篡改 / 伪造 / 重放 / 窃听 / **链路中间人** 五项安全测试在两端全部通过；
 密码算法与 **OpenSSL / Mbed TLS / Botan** 三个库完成 1 KB ~ 100 MB 的性能对比，
 并且每个库都给出"默认（可能启用硬件加速）"与"纯软件"两组数据 + 一张倍率汇总表。
 
@@ -31,14 +30,17 @@
 | 想了解什么                                   | 文件                                                                                      |
 | -------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | 项目总览、架构、运行方式                     | 本文件（`README.md`）                                                                   |
-| **当前进展、决策记录、每一轮做了什么** | **[`Part2_transfer.md`](Part2_transfer.md)**                                       |
+| 第二部分的方案（设计取舍与理由）             | [`Part2_transfer.md`](Part2_transfer.md)                                                 |
+| **每一轮做了什么（研发历程与决策记录）**     | **[`docs/history_rounds.md`](docs/history_rounds.md)**                                   |
 | 功能测试与攻击测试的实测数据                 | [`docs/test_report.md`](docs/test_report.md)                                             |
 | 与库实现的性能对比（要求 5）                 | [`docs/performance.md`](docs/performance.md)                                             |
 | 局域网双机通信测试（要求 6）                 | [`docs/lan_test.md`](docs/lan_test.md)                                                   |
 | **文件与图像传输（要求 9）与实验数据** | **[`docs/file_transfer.md`](docs/file_transfer.md)**、[`experiment_data/`](experiment_data/)    |
 | **访问控制（要求 7）**                 | **[`docs/access_control.md`](docs/access_control.md)**                             |
 | **图形界面（要求 8）与截图**           | **[`docs/ui.md`](docs/ui.md)**、[`docs/screenshots/`](docs/screenshots/README.md) |
-| **Windows 迁移：改了什么、两端实测数据** | **[`Part2_transfer.md`](Part2_transfer.md) 的 §23（M2–M6）**                   |
+| **中间人攻击证据（独立进程 Eve）**           | **[`docs/eve_mitm.md`](docs/eve_mitm.md)**                                               |
+| **Windows 迁移：改了什么、两端实测数据**     | **[`docs/history_rounds.md`](docs/history_rounds.md) §23（M2–M6）**                       |
+| 第一阶段（纯 TCP 网络层）的设计存档          | [`docs/history_stage1.md`](docs/history_stage1.md)                                       |
 | **窃听攻击证据（Eve 只能看到密文，Windows/tshark 跨机抓包）** | **[`docs/eavesdrop.md`](docs/eavesdrop.md)**、[`experiment_data/captures/`](experiment_data/captures/) |
 | 课程要求逐条对照                             | [`docs/requirements.md`](docs/requirements.md)                                           |
 | 协议格式与流程细节                           | [`docs/protocol.md`](docs/protocol.md)、[`docs/interfaces.md`](docs/interfaces.md)      |
@@ -107,7 +109,8 @@ Alice 和 Bob 只能通过不安全的网络通信，Eve 可以窃听、篡改�
 
 | 项                          | 现状                                               | 备注                                                                          |
 | --------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------- |
-| 要求的 1~7 项功能           | ✅ 已实现并实测                                    | 见`docs/requirements.md` 的逐条对照                                         |
+| 课程要求 1~9                | ✅ 已实现并实测                                    | 逐条对照（含代码位置与证据）见 `docs/requirements.md`                        |
+| 课程要求 10（扩充功能）     | 🟡 部分达成                                        | 中间人攻击工具、攻击拦截关卡、CI 自动出包、免环境发布包等                    |
 | AES-128 / AES-CTR           | ✅ 已集成（第一部分交付，`src/crypto/aes.cpp`）  | FIPS-197 + NIST SP 800-38A 向量验证                                           |
 | CMAC                        | ✅ 已集成（第一部分交付，`src/crypto/cmac.cpp`） | RFC 4493 的 4 条标准向量验证                                                  |
 | 性能对比 benchmark          | ✅ 已完成（`tools/crypto_benchmark`）            | 与 OpenSSL / Mbed TLS / Botan 对比，覆盖 1 KB~100 MB，含纯软件对照与汇总表：`docs/performance.md` §9 |
@@ -115,9 +118,9 @@ Alice 和 Bob 只能通过不安全的网络通信，Eve 可以窃听、篡改�
 | 文件 / 图像传输             | ✅ 已完成（`src/application/`）                  | 分块 + 单包两条路径，含整文件 CRC32 校验与实验数据：`docs/file_transfer.md` |
 | 访问控制（Role/Permission） | ✅ 已完成（`src/security/access_control.cpp`）   | 策略可配置、服务端权威判定、审计日志：`docs/access_control.md`              |
 | Qt/图形界面                 | ✅ Linux 已完成（`apps/ui/`，Qt 5.12 Widgets）   | 需要`qtbase5-dev`；截图见 `docs/screenshots/`，说明见 `docs/ui.md`    |
-| Windows 侧编译与测试 | ✅ 已完成（MSYS2 MinGW-w64） | 0 错误 0 警告，`ctest` 16/16；见 `Part2_transfer.md` §23.3 |
+| Windows 侧编译与测试 | ✅ 已完成（MSYS2 MinGW-w64） | 0 错误 0 警告，`ctest` 18/18；见 `docs/history_rounds.md` §23.3 |
 | Windows 侧 Qt 界面 | ✅ 已完成（MSYS2 Qt 5.15.19） | 0 错误 0 警告；截图 `docs/screenshots/windows_ui_client.png`；说明见 `docs/ui.md` §10 |
-| 跨系统双机（Windows ↔ Ubuntu） | ✅ 已完成（双向） | 两个方向各跑完整会话，接收文件 sha256 逐字节一致；见 `Part2_transfer.md` §23.6 |
+| 跨系统双机（Windows ↔ Ubuntu） | ✅ 已完成（双向） | 两个方向各跑完整会话，接收文件 sha256 逐字节一致；见 `docs/history_rounds.md` §23.6 |
 | 前向保密                    | 不支持                                             | 预共享密钥方案的固有限制（`K_master` 泄露则历史会话可解）                   |
 | 抗 DoS                      | 不设计                                             | 未认证的 HELLO 也会被处理                                                     |
 
@@ -131,57 +134,47 @@ Alice 和 Bob 只能通过不安全的网络通信，Eve 可以窃听、篡改�
 securityTransfer/
 ├── CMakeLists.txt
 ├── README.md
-├── configs/
-│   ├── keys.conf.example     # K_master 与身份配置模板（提交进版本管理）
-│   ├── keys.conf             # 实际使用的密钥文件（600 权限，已被 .gitignore 排除）
-│   ├── access_policy.conf    # 访问控制策略（角色 / 权限 / 身份映射）
-│   └── demo_config.conf      # 协议与演示参数记录
-├── Part2_transfer.md         # 第二部分的完整方案与实施进度记录
-├── include/
-│   ├── application/          # 文件 / 图像传输（第三部分）：crc32 / transfer_meta / file_transfer
-│   ├── common/               # types / byte_buffer / random / hex / constant_time / log
-│   ├── crypto/               # AES / CMAC（第一部分成果）+ CryptoProvider / MacEngine 接缝
-│   ├── network/              # 第一阶段成果：Frame / Network（未改动）
-│   ├── protocol/             # message_type / packet / transcript
-│   └── security/             # keystore / replay_guard / session
-├── src/                      # 与 include 对应的实现（application / crypto / network / protocol / security）
+├── configs/                  # keys.conf(示例/实际) / access_policy.conf / demo_config.conf
+├── Part2_transfer.md         # 第二部分方案（设计取舍与理由）+ 研发历程索引
+├── include/  src/            # 按层划分：common / crypto / network / protocol / security / application / attack
 ├── apps/
-│   ├── alice/main.cpp        # 客户端：握手 + 4 条测试消息
-│   ├── bob/main.cpp          # 服务端：握手 + 校验 + 回复 + 统计
-│   └── ui/                   # 图形界面（Qt5）：main / main_window / session_worker
+│   ├── alice/main.cpp        # 客户端：握手 + 4 条课程测试消息
+│   ├── bob/main.cpp          # 服务端：常驻、握手、访问控制判定、统计
+│   ├── eve/main.cpp          # 链路中间人（攻击演示，独立进程）
+│   └── ui/                   # 图形界面（Qt5）：main / app_theme / main_window / session_worker / mitm_controller
 ├── tests/
-│   ├── unit/                 # aes_cmac / packet / transcript / replay_guard / session_state / transfer_meta / frame / network
-│   └── integration/          # tcp_roundtrip / secure_roundtrip / file_transfer / tamper / forge / replay
-├── experiment_data/                  # 实验数据（文本 / 二进制文件 / 两张 PNG）+ received/（接收结果，主机与虚拟机各一份）
-├── scripts/
-│   ├── verify_in_vm.sh       # 一键：编译 + ctest + 演示 + 攻击测试
-│   ├── capture_eve.sh        # 抓包演示（Eve 窃听）
-│   ├── lan_test.sh           # 局域网双机测试（单机模拟两台主机 / 真机双机）
-│   └── deploy_to_home.sh     # 部署到 /home/securityTransfer
-├── tools/
-│   ├── cmac_benchmark.cpp    # CMAC 性能测试（第一部分成果的加工程序）
-│   ├── crypto_benchmark.cpp  # 多库性能对比的 driver（要求 5；⚠ 只有它链接密码库）
-│   ├── bench_backend_*.cpp   # 各库后端：self / openssl / mbedtls / botan
-│   └── bench_merge.py        # 把多次运行的 CSV 合并成汇总表
-├── reference/
-│   ├── part1-aes-cmac/       # 第一部分交付原件存档（Windows 工程，不参与构建）
-│   └── aes-c-legacy/         # 更早的 C 版 AES 实现（已被 C++ 版取代，留档）
+│   ├── unit/                 # frame network aes_cmac packet transcript replay_guard
+│   │                         # session_state transfer_meta access_control reject_gate
+│   └── integration/          # tcp_roundtrip secure_roundtrip file_transfer access_control_e2e
+│                             # tamper forge replay mitm
+├── experiment_data/          # 实验数据 + received*/（接收结果）+ benchmarks/（性能原始数据）+ captures/（抓包）
+├── scripts/                  # verify_in_vm / capture_eve* / lan_test / deploy_to_home
+│                             # package_windows / run_benchmarks / get_ui.ps1
+├── tools/                    # crypto_benchmark（多后端）+ cmac_benchmark + bench_merge.py
+├── reference/                # 第一部分交付原件（part1-aes-cmac）+ 更早的 C 版 AES（留档）
+├── dist/                     # Windows 免环境发布包（脚本生成，不入库）
+├── .github/workflows/        # CI：Linux+Windows 跑 ctest；发 Release 时自动出 Windows UI 包
 └── docs/
-    ├── project_q1.md         # 课程原始需求文档
-    ├── team_interfaces_original.md                # 组内接口约定
-    ├── requirements.md       # 课程要求 vs 实现状态对照
+    ├── project_q1.md         # 课程原始需求
+    ├── requirements.md       # ★ 课程要求完成情况（唯一权威对照表）
+    ├── project_overview.md   # 项目全景：速览 / 架构 / 一次连接走一遍
+    ├── project_walkthrough.md# 自述版梳理（面向讲解）
     ├── architecture.md       # 分层、模块、依赖方向
     ├── protocol.md           # 数据包格式与协议流程（核心）
-    ├── interfaces.md         # 对外接口说明
+    ├── interfaces.md         # 对外接口说明（另有 team_interfaces_original.md：组内最初约定）
     ├── development.md        # 编译、运行、扩展指南
     ├── test_report.md        # 实测结果（含攻击测试数据）
-├── performance.md        # 性能对比报告（自实现 vs OpenSSL / Mbed TLS / Botan，要求 5）
-    ├── lan_test.md           # 局域网双机测试报告（要求 6）
-    ├── file_transfer.md      # 文件与图像传输说明 + 实测数据（要求 9）
-    ├── access_control.md     # 访问控制：策略、判定流程、实测数据（要求 7）
-    ├── ui.md                 # 图形界面：方案选择、功能设计、截图、已知限制（要求 8）
-    ├── screenshots/          # 界面截图（服务端视角 / 客户端视角）+ 获取方法
-    └── stage1/               # 第一阶段（纯 TCP）文档存档（含历史说明，见其中的 README）
+    ├── performance.md        # 性能对比（自实现 vs OpenSSL / Mbed TLS / Botan）
+    ├── lan_test.md           # 局域网 / 双机测试
+    ├── eavesdrop.md          # 窃听证据（tshark 跨机抓包）
+    ├── eve_mitm.md           # ★ 中间人攻击（独立进程）与实测
+    ├── file_transfer.md      # 文件与图像传输（要求 9）
+    ├── access_control.md     # 访问控制（要求 7）
+    ├── ui.md                 # 图形界面（含改版与修复记录，要求 8）
+    ├── release_notes.md      # 发布包说明与下载方式
+    ├── history_rounds.md     # ★ 分轮研发历程（原 Part2 §16–§31 归档）
+    ├── history_stage1.md     # 第一阶段（纯 TCP 网络层）设计存档
+    └── screenshots/          # 界面截图 + 获取方法
 ```
 
 ## 4. 编译与运行（Ubuntu）
